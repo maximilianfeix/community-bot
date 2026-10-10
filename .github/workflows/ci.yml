@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:   # redeploy by hand, for example after changing a token
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install --require-hashes -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - run: pytest
+
+  deploy:
+    name: Deploy
+    needs: test
+    # Never for pull requests: a pull request from a fork must not reach the secrets or the server.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency: deploy   # never two deploys at the same time
+    env:
+      # Log in as root, or as DEPLOY_USER (a user with passwordless sudo) when root login is off.
+      # Host and user are secrets so they stay out of the public log.
+      USER_AT_HOST: ${{ secrets.DEPLOY_USER || 'root' }}@${{ secrets.DEPLOY_HOST }}
+      SUDO: ${{ (secrets.DEPLOY_USER && secrets.DEPLOY_USER != 'root') && 'sudo -n' || '' }}
+    steps:
+      - name: Check the secrets
+        id: secrets
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          GUILD: ${{ secrets.GUILD_ID }}
+        run: |
+          missing=""
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$KEY" ] || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$KNOWN" ] || missing="$missing DEPLOY_KNOWN_HOSTS"
+          [ -n "$TOKEN" ] || missing="$missing DISCORD_TOKEN"
+          [ -n "$GUILD" ] || missing="$missing GUILD_ID"
+          if [ -n "$missing" ]; then
+            echo "::notice::Not deploying, secrets missing:$missing (see README.md)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+
+      - name: Set up SSH
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          # Pinned host key: a server that presents a different key gets no token.
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+
+      - name: Copy the bot
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          tar --exclude '__pycache__' -czf - communitybot deploy requirements.txt \
+            | ssh -o BatchMode=yes "$USER_AT_HOST" \
+            "$SUDO sh -c 'set -e; rm -rf /opt/communitybot/app.new; mkdir -p /opt/communitybot/app.new;
+             tar -xzf - --no-same-owner -C /opt/communitybot/app.new;
+             rm -rf /opt/communitybot/app.old;
+             [ -d /opt/communitybot/app ] && mv /opt/communitybot/app /opt/communitybot/app.old;
+             mv /opt/communitybot/app.new /opt/communitybot/app'"
+
+      - name: Write the environment file
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          GUILD: ${{ secrets.GUILD_ID }}
+          GITHUB_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
+        run: |
+          printf 'DISCORD_TOKEN=%s\nCOMMUNITYBOT_GUILD_ID=%s\nGITHUB_TOKEN=%s\n' \
+            "$TOKEN" "$GUILD" "$GITHUB_API_TOKEN" \
+            | ssh -o BatchMode=yes "$USER_AT_HOST" "$SUDO sh -c 'umask 077; cat > /etc/communitybot.env'"
+
+      - name: Install and restart
+        if: steps.secrets.outputs.ready == 'true'
+        run: ssh -o BatchMode=yes "$USER_AT_HOST" "$SUDO bash /opt/communitybot/app/deploy/install.sh"

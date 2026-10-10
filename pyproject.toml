@@ -1,0 +1,35 @@
+[project]
+name = "communitybot"
+version = "0.1.0"
+description = "The Discord bot of the maximilianfeix open-source server."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --cov=communitybot --cov-report=term-missing"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "if __name__ == .__main__.:"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PTH", "RUF", "S", "N", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+"communitybot/bot.py" = ["S101"]   # asserts that narrow Optional attributes set in setup_hook
+"tools/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["communitybot", "tests", "tools"]
