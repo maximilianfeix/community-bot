@@ -6,6 +6,8 @@ import logging
 import os
 import sys
 
+import discord
+
 from .bot import CommunityBot
 from .config import ConfigError, Settings
 from .state import StateError
@@ -19,8 +21,13 @@ def main() -> int:
     except (ConfigError, StateError) as error:
         print(f"communitybot: {error}", file=sys.stderr)
         return 2
-    # log_handler=None: logging is already set up above; discord.py would add a second handler
-    bot.run(settings.token, log_handler=None)
+    try:
+        # log_handler=None: logging is already set up above; discord.py would add a second handler
+        bot.run(settings.token, log_handler=None)
+    except discord.LoginFailure:
+        # One clear line instead of a traceback; the deploy log shows this when the secret is wrong.
+        print("communitybot: Discord rejected the token; check the DISCORD_TOKEN secret", file=sys.stderr)
+        return 2
     return 0
 
 

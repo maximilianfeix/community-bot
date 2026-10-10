@@ -115,3 +115,34 @@ class TestSettings:
         with pytest.raises(ConfigError) as caught:
             Settings.from_env({"DISCORD_TOKEN": TOKEN, "COMMUNITYBOT_GUILD_ID": TOKEN})
         assert TOKEN not in str(caught.value)
+
+
+class TestMain:
+    def test_rejected_token_gives_one_clear_line(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import discord
+
+        from communitybot import __main__ as entry
+
+        def refuse(self: object, token: str, **options: object) -> None:
+            raise discord.LoginFailure("Improper token has been passed.")
+
+        monkeypatch.setattr(entry.CommunityBot, "run", refuse)
+        monkeypatch.setenv("DISCORD_TOKEN", TOKEN)
+        monkeypatch.setenv("COMMUNITYBOT_GUILD_ID", "100000000000000001")
+        monkeypatch.setenv("COMMUNITYBOT_STATE", str(tmp_path / "state.json"))
+        assert entry.main() == 2
+        err = capsys.readouterr().err
+        assert "Discord rejected the token" in err
+        assert TOKEN not in err
+        assert "Traceback" not in err
+
+    def test_missing_settings_exit_with_a_message(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from communitybot import __main__ as entry
+
+        monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+        assert entry.main() == 2
+        assert "DISCORD_TOKEN is not set" in capsys.readouterr().err
