@@ -1,13 +1,20 @@
-"""Everything the bot posts, as embeds. Building them touches nothing outside this module."""
+"""Everything the bot posts, built with Discord's layout components. Nothing here talks to Discord.
+
+Layout components instead of embeds: a container is as wide as the channel allows, so the cards line up,
+a banner can sit at the top, and buttons can stand next to the text they belong to. A message built this
+way has no separate text or embeds, so a ping has to be written into the layout itself.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Any
 
 import discord
+from discord import ui
 
 from . import sanitize
 from .github import RepoInfo
@@ -18,7 +25,8 @@ ACCENT = 0xD4F77A
 PROFILE = "https://github.com/maximilianfeix"
 BANNER_NAME = "banner.png"
 NOTES_LIMIT = 1500
-NO_DATA = "n/a"
+FORMAT = "layout-1"
+"""Part of every fingerprint. Change it to have all maintained messages rebuilt."""
 
 RULES = (
     "Be respectful. No harassment, hate or personal attacks.",
@@ -28,85 +36,127 @@ RULES = (
     "Bugs and feature requests go to GitHub. Security problems are reported privately there.",
 )
 
+PLACES = (
+    ("channel:announcements", "new releases, posted automatically"),
+    ("channel:general", "talk about the projects"),
+    ("channel:help", "questions about using them"),
+)
 
-def welcome(channels: Mapping[str, int]) -> discord.Embed:
+
+def welcome(channels: Mapping[str, int], with_banner: bool = True) -> ui.LayoutView:
     """The first thing a new member reads: what this is, where to go, the rules."""
-    embed = discord.Embed(
-        title="Welcome",
-        description=(
-            "This is the home of the open-source tools by "
-            f"[maximilianfeix]({PROFILE}): small developer tools that do one job and show their work.\n\n"
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    if with_banner:
+        banner = discord.MediaGalleryItem(
+            f"attachment://{BANNER_NAME}", description="maximilianfeix open source"
+        )
+        container.add_item(ui.MediaGallery(banner))
+    container.add_item(
+        ui.TextDisplay(
+            "# Welcome\n"
+            f"This is the home of the open-source tools by [maximilianfeix]({PROFILE}): "
+            "small developer tools that do one job and show their work.\n\n"
             "Ask questions, share what you built, or just follow the releases."
-        ),
-        color=ACCENT,
+        )
     )
-    places = [
-        ("channel:announcements", "new releases, posted automatically"),
-        ("channel:general", "talk about the projects"),
-        ("channel:help", "questions about using them"),
-    ]
-    where = [f"<#{channels[key]}>  {text}" for key, text in places if key in channels]
+    where = [f"<#{channels[key]}>  {text}" for key, text in PLACES if key in channels]
     if where:
-        embed.add_field(name="Where things are", value="\n".join(where), inline=False)
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.large))
+        container.add_item(ui.TextDisplay("### Where things are\n" + "\n".join(where)))
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.large))
     rules = "\n".join(f"{number}. {rule}" for number, rule in enumerate(RULES, 1))
-    embed.add_field(name="Rules", value=rules, inline=False)
-    embed.set_image(url=f"attachment://{BANNER_NAME}")
-    embed.set_footer(text="Chat here is public. Anything worth keeping is copied to GitHub.")
-    return embed
+    container.add_item(ui.TextDisplay("### Rules\n" + rules))
+    container.add_item(ui.TextDisplay("-# Chat here is public. Anything worth keeping is copied to GitHub."))
+    return _view(container)
 
 
-def project_card(project: Project, info: RepoInfo | None, latest: Release | None) -> discord.Embed:
-    """One project: what it is, how many stars, the latest release."""
-    embed = discord.Embed(title=project.name, url=project.url, description=project.tagline, color=ACCENT)
-    embed.add_field(name="Language", value=project.language)
-    embed.add_field(name="Stars", value=f"{info.stars:,}" if info else NO_DATA)
+def project_line(project: Project, info: RepoInfo | None, latest: Release | None) -> str:
+    """The small line under a project: stars, language, latest release."""
+    parts = [project.language]
+    if info is not None:
+        parts.insert(0, f"★ {info.stars:,}")
     if latest and latest.url:
         when = _relative(latest.published_at)
-        value = f"[{sanitize.one_line(latest.tag, 40)}]({latest.url})" + (f" · {when}" if when else "")
+        tag = f"[{sanitize.one_line(latest.tag, 40)}]({latest.url})"
+        parts.append(f"{tag} {when}".strip())
     else:
-        value = "No release yet"
-    embed.add_field(name="Latest release", value=value)
-    return embed
+        parts.append("no release yet")
+    return " · ".join(parts)
 
 
-def project_cards(info: Mapping[str, RepoInfo], latest: Mapping[str, Release | None]) -> list[discord.Embed]:
-    return [project_card(p, info.get(p.slug), latest.get(p.slug)) for p in PROJECTS]
-
-
-def picker() -> discord.Embed:
-    return discord.Embed(
-        title="Release notifications",
-        description=(
-            "Press a button to be pinged when that project ships a release. "
-            "Press it again to stop. Only you see the answer."
-        ),
-        color=ACCENT,
+def _project_section(
+    project: Project, info: RepoInfo | None, latest: Release | None
+) -> ui.Section[ui.LayoutView]:
+    text = f"### {project.name}\n{project.tagline}\n-# {project_line(project, info, latest)}"
+    button: ui.Button[ui.LayoutView] = ui.Button(
+        label="GitHub", url=project.url, style=discord.ButtonStyle.link
     )
+    return ui.Section(ui.TextDisplay(text), accessory=button)
 
 
-def release(project: Project, item: Release) -> discord.Embed:
-    """The announcement for one release. Notes are cleaned and shortened; the full text is one click away."""
+def projects(info: Mapping[str, RepoInfo], latest: Mapping[str, Release | None]) -> ui.LayoutView:
+    """Every project in one card, each with its own link."""
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container.add_item(ui.TextDisplay("## Projects"))
+    for index, project in enumerate(PROJECTS):
+        if index:
+            container.add_item(ui.Separator())
+        container.add_item(_project_section(project, info.get(project.slug), latest.get(project.slug)))
+    return _view(container)
+
+
+def project(item: Project, info: RepoInfo | None, latest: Release | None) -> ui.LayoutView:
+    """One project, for the /project command."""
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container.add_item(_project_section(item, info, latest))
+    return _view(container)
+
+
+def release(item_project: Project, item: Release, role_mention: str = "") -> ui.LayoutView:
+    """The announcement for one release. Notes are cleaned and shortened; the full text is one click away.
+
+    `role_mention` is written into the layout, because a message of this kind has no separate text. Who it
+    may actually ping is decided by the allowed mentions of the send call, not here.
+    """
     tag = sanitize.one_line(item.tag, 60)
-    embed = discord.Embed(
-        title=f"{project.name} {tag}".strip(),
-        url=item.url or project.url,
-        description=sanitize.notes(item.body, NOTES_LIMIT) or "No release notes.",
-        color=ACCENT,
-    )
     name = sanitize.one_line(item.name, 120)
+    heading = f"## {item_project.name} {tag}".strip()
     if name and name != tag:
-        embed.set_author(name=name)
-    published = _parse(item.published_at)
-    if published:
-        embed.timestamp = published
-    embed.set_footer(text=f"{project.repo} · full notes on GitHub")
-    return embed
+        heading += f"\n-# {name}"
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container.add_item(ui.TextDisplay(heading))
+    container.add_item(ui.TextDisplay(sanitize.notes(item.body, NOTES_LIMIT) or "No release notes."))
+    container.add_item(ui.Separator())
+    link: ui.Button[ui.LayoutView] = ui.Button(
+        label="Full release notes", url=item.url or item_project.url, style=discord.ButtonStyle.link
+    )
+    footer = [role_mention, item_project.repo, _absolute(item.published_at)]
+    container.add_item(
+        ui.Section(ui.TextDisplay("-# " + " · ".join(part for part in footer if part)), accessory=link)
+    )
+    return _view(container)
 
 
-def fingerprint(embeds: Sequence[discord.Embed], extra: str = "") -> str:
+def fingerprint(view: ui.LayoutView, extra: str = "") -> str:
     """A stable hash of what a message shows, to tell whether it has to be edited."""
-    payload = json.dumps([embed.to_dict() for embed in embeds], sort_keys=True, default=str)
-    return hashlib.sha256((payload + "\n" + extra).encode("utf-8")).hexdigest()[:32]
+    payload = json.dumps(components(view), sort_keys=True, default=str)
+    return hashlib.sha256(f"{FORMAT}\n{payload}\n{extra}".encode()).hexdigest()[:32]
+
+
+def components(view: ui.LayoutView) -> list[dict[str, Any]]:
+    """The layout exactly as it is sent to Discord."""
+    return view.to_components()  # type: ignore[no-untyped-call, no-any-return]
+
+
+def text_of(view: ui.LayoutView) -> str:
+    """All text a layout shows, joined. For tests and for checking Discord's length limit."""
+    return "\n".join(child.content for child in view.walk_children() if isinstance(child, ui.TextDisplay))
+
+
+def _view(container: ui.Container[ui.LayoutView]) -> ui.LayoutView:
+    view = ui.LayoutView(timeout=None)
+    view.add_item(container)
+    return view
 
 
 def _parse(timestamp: str) -> datetime | None:
@@ -121,3 +171,8 @@ def _relative(timestamp: str) -> str:
     """Discord's relative time tag ("3 days ago"), rendered in each reader's own language."""
     parsed = _parse(timestamp)
     return f"<t:{int(parsed.timestamp())}:R>" if parsed else ""
+
+
+def _absolute(timestamp: str) -> str:
+    parsed = _parse(timestamp)
+    return f"<t:{int(parsed.timestamp())}:D>" if parsed else ""

@@ -148,8 +148,7 @@ async def ensure_message(
     save: Callable[[], None],
     *,
     fingerprint: str,
-    embeds: Sequence[discord.Embed],
-    view: discord.ui.View | None = None,
+    make_view: Callable[[], discord.ui.LayoutView],
     make_file: Callable[[], discord.File] | None = None,
     verify: bool = False,
 ) -> None:
@@ -171,12 +170,36 @@ async def ensure_message(
             return
         if message is not None:
             attachments = [make_file()] if make_file else discord.utils.MISSING
-            await message.edit(embeds=list(embeds), view=view, attachments=attachments)
+            await message.edit(view=make_view(), attachments=attachments)
             state.messages[key] = MessageState(message.id, fingerprint)
             save()
             return
 
     files = [make_file()] if make_file else discord.utils.MISSING
-    sent = await channel.send(embeds=list(embeds), view=view or discord.utils.MISSING, files=files)
+    sent = await channel.send(view=make_view(), files=files)
     state.messages[key] = MessageState(sent.id, fingerprint)
     save()
+
+
+async def retire_message(
+    channel: discord.TextChannel, key: str, state: State, save: Callable[[], None]
+) -> None:
+    """Delete a message the bot kept under an old key, and forget it. Used when a message is replaced."""
+    known = state.messages.pop(key, None)
+    if known is None:
+        return
+    try:
+        message = await channel.fetch_message(known.message_id)
+        await message.delete()
+    except discord.NotFound:
+        pass
+    save()
+
+
+async def order_categories(guild: discord.Guild, state: State, keys: Sequence[str]) -> None:
+    """Put the bot's categories at the top, in the given order. Other categories keep their own order
+    below; none of them is edited."""
+    for position, key in enumerate(keys):
+        category = _category(guild, state, key)
+        if category is not None and category.position != position:
+            await category.edit(position=position, reason=REASON)

@@ -201,7 +201,7 @@ class TestEnsureMessage:
             state,
             Saves(),
             fingerprint=fingerprint,
-            embeds=[messages.picker()],
+            make_view=views.picker,
             verify=verify,
         )
 
@@ -347,12 +347,15 @@ class TestAnnounce:
         await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
         channel.send.assert_awaited_once()
         sent = channel.send.await_args.kwargs
-        assert sent["content"] == "<@&77>"
+        assert "content" not in sent
+        assert "embed" not in sent
+        shown = messages.text_of(sent["view"])
+        assert shown.count("<@&77>") == 1
         assert sent["allowed_mentions"].roles == [role]
         assert sent["allowed_mentions"].everyone is False
         assert sent["allowed_mentions"].users is False
         assert sent["allowed_mentions"].to_dict() == {"parse": [], "roles": [role.id]}
-        assert "@everyone" not in sent["embed"].description
+        assert "@everyone" not in shown
         assert bot.state.repo("dejabuilt").seen == [1, 2]
 
     async def test_release_is_remembered_before_it_is_posted(self, tmp_path: Path) -> None:
@@ -372,7 +375,7 @@ class TestAnnounce:
         await bot._announce(guild, PROJECT, [])  # type: ignore[arg-type]
         await bot._announce(guild, PROJECT, [make_release(4)])  # type: ignore[arg-type]
         sent = channel.send.await_args.kwargs
-        assert sent["content"] is None
+        assert "<@" not in messages.text_of(sent["view"])
         assert sent["allowed_mentions"].to_dict() == {"parse": []}
 
     async def test_without_the_channel_the_release_stays_unannounced(self, tmp_path: Path) -> None:
@@ -505,3 +508,115 @@ async def test_button_acknowledges_before_it_changes_the_role(tmp_path: Path) ->
     assert order == ["defer", "answer"]
     assert interaction.response.defer.await_args.kwargs["ephemeral"] is True
     assert interaction.followup.send.await_args.kwargs["ephemeral"] is True
+
+
+class TestRetireMessage:
+    async def test_old_message_is_deleted_and_forgotten(self) -> None:
+        old = MagicMock(id=7)
+        old.delete = AsyncMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.fetch_message = AsyncMock(return_value=old)
+        state, save = State(messages={"message:welcome": MessageState(7, "f")}), Saves()
+        await layout.retire_message(channel, "message:welcome", state, save)
+        old.delete.assert_awaited_once()
+        assert state.messages == {}
+        assert save.count == 1
+
+    async def test_message_that_is_already_gone_is_just_forgotten(self) -> None:
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.fetch_message = AsyncMock(side_effect=not_found())
+        state = State(messages={"message:welcome": MessageState(7, "f")})
+        await layout.retire_message(channel, "message:welcome", state, Saves())
+        assert state.messages == {}
+
+    async def test_unknown_key_costs_no_request(self) -> None:
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.fetch_message = AsyncMock()
+        save = Saves()
+        await layout.retire_message(channel, "message:nope", State(), save)
+        channel.fetch_message.assert_not_awaited()
+        assert save.count == 0
+
+
+class TestOrderCategories:
+    def guild_with(self, positions: dict[str, int]) -> tuple[FakeGuild, State, dict[str, Any]]:
+        guild, state, categories = FakeGuild(), State(), {}
+        for index, (key, position) in enumerate(positions.items()):
+            category = MagicMock(spec=discord.CategoryChannel)
+            category.position = position
+            guild.things[500 + index] = category
+            state.resources[key] = 500 + index
+            categories[key] = category
+        return guild, state, categories
+
+    async def test_owned_categories_are_moved_to_the_top_in_order(self) -> None:
+        guild, state, categories = self.guild_with({"category:info": 3, "category:community": 4})
+        await layout.order_categories(guild, state, ["category:info", "category:community"])  # type: ignore[arg-type]
+        assert categories["category:info"].edit.await_args.kwargs["position"] == 0
+        assert categories["category:community"].edit.await_args.kwargs["position"] == 1
+
+    async def test_categories_already_in_place_are_not_edited(self) -> None:
+        guild, state, categories = self.guild_with({"category:info": 0, "category:community": 1})
+        await layout.order_categories(guild, state, ["category:info", "category:community"])  # type: ignore[arg-type]
+        categories["category:info"].edit.assert_not_awaited()
+        categories["category:community"].edit.assert_not_awaited()
+
+    async def test_missing_category_is_skipped(self) -> None:
+        guild, state, categories = self.guild_with({"category:info": 5})
+        await layout.order_categories(guild, state, ["category:gone", "category:info"])  # type: ignore[arg-type]
+        assert categories["category:info"].edit.await_args.kwargs["position"] == 1
+
+
+class TestAvatar:
+    def bot_with_user(self, tmp_path: Path, avatar: object) -> tuple[CommunityBot, MagicMock]:
+        bot = make_bot(tmp_path)
+        user = MagicMock()
+        user.avatar = avatar
+        user.edit = AsyncMock()
+        bot._connection.user = user
+        return bot, user
+
+    async def test_set_once_when_the_bot_has_none(self, tmp_path: Path) -> None:
+        bot, user = self.bot_with_user(tmp_path, None)
+        await bot._set_avatar()
+        user.edit.assert_awaited_once()
+        assert user.edit.await_args.kwargs["avatar"].startswith(b"\x89PNG")
+
+    async def test_existing_avatar_is_left_alone(self, tmp_path: Path) -> None:
+        bot, user = self.bot_with_user(tmp_path, object())
+        await bot._set_avatar()
+        user.edit.assert_not_awaited()
+
+    async def test_rate_limit_is_only_logged(self, tmp_path: Path) -> None:
+        bot, user = self.bot_with_user(tmp_path, None)
+        user.edit.side_effect = http_error()
+        await bot._set_avatar()
+
+
+async def test_messages_are_posted_as_layouts_and_old_embed_messages_are_retired(tmp_path: Path) -> None:
+    bot = make_bot(tmp_path)
+    guild = FakeGuild()
+    channel = MagicMock(spec=discord.TextChannel)
+    old = MagicMock()
+    old.delete = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=old)
+    counter = iter(range(900, 999))
+    channel.send = AsyncMock(side_effect=lambda **_: MagicMock(id=next(counter)))
+    guild.things[66] = channel
+    bot.state.resources[definition.WELCOME] = 66
+    bot.state.messages["message:welcome"] = MessageState(1, "old")
+    bot.state.messages["message:projects"] = MessageState(2, "old")
+    bot.state.messages["message:picker"] = MessageState(3, "old")
+
+    await bot._update_messages(guild)  # type: ignore[arg-type]
+
+    assert old.delete.await_count == 3
+    assert sorted(bot.state.messages) == ["message:picker:2", "message:projects:2", "message:welcome:2"]
+    assert channel.send.await_count == 3
+    for call in channel.send.await_args_list:
+        assert isinstance(call.kwargs["view"], discord.ui.LayoutView)
+        assert "embeds" not in call.kwargs
+    assert channel.send.await_args_list[0].kwargs["files"][0].filename == "banner.png"
+
+    await bot._update_messages(guild)  # type: ignore[arg-type]
+    assert channel.send.await_count == 3  # nothing changed, nothing is sent again
