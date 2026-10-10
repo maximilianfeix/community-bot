@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import aiohttp
@@ -186,10 +186,11 @@ class CommunityBot(discord.Client):
             verify=verify,
         )
         # One card at the top of each open channel, so that neither starts empty.
-        for key, channel_key, make in (
+        starters: list[tuple[str, str, Callable[[], discord.ui.LayoutView]]] = [
             (HELLO_MESSAGE, definition.GENERAL, lambda: messages.hello(channel_ids)),
             (ASK_MESSAGE, definition.HELP, messages.ask),
-        ):
+        ]
+        for key, channel_key, make in starters:
             target = layout.text_channel(guild, self.state, channel_key)
             if target is not None:
                 await layout.ensure_message(
