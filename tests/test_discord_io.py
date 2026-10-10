@@ -18,7 +18,7 @@ from communitybot.projects import BY_SLUG, PROJECTS
 from communitybot.releases import Release
 from communitybot.state import MessageState, State
 
-GUILD_ID = 1558559118694944790
+GUILD_ID = 100000000000000001
 PROJECT = BY_SLUG["dejabuilt"]
 
 

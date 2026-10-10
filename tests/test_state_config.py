@@ -66,13 +66,13 @@ class TestState:
         assert "SECRET-LOOKING" not in str(caught.value)
 
 
-BASE: dict[str, str] = {"DISCORD_TOKEN": TOKEN, "COMMUNITYBOT_GUILD_ID": "1558559118694944790"}
+BASE: dict[str, str] = {"DISCORD_TOKEN": TOKEN, "COMMUNITYBOT_GUILD_ID": "100000000000000001"}
 
 
 class TestSettings:
     def test_minimal_environment(self) -> None:
         settings = Settings.from_env(BASE)
-        assert settings.guild_id == 1558559118694944790
+        assert settings.guild_id == 100000000000000001
         assert settings.poll_seconds == 900
         assert settings.github_token == ""
         assert settings.state_file == Path("state.json")
