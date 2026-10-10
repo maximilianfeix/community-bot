@@ -149,6 +149,6 @@ class TestMain:
 
 
 def test_one_off_jobs_survive_a_round_trip_and_old_files_have_none() -> None:
-    state = State(done={"catch-up:announcements"})
-    assert State.from_dict(state.to_dict()).done == {"catch-up:announcements"}
+    state = State(done={"catch-up:dejabuilt"})
+    assert State.from_dict(state.to_dict()).done == {"catch-up:dejabuilt"}
     assert State.from_dict({"version": 1}).done == set()

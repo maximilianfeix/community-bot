@@ -11,14 +11,17 @@ from dataclasses import dataclass
 from .projects import PROJECTS
 
 ACCENT = 0xD4F77A
-"""The one colour of the server: cards, banner, avatar and roles."""
+"""The one colour of the server: cards, banner and avatar."""
+ROLE_COLOUR = 0x7A9E1F
+"""The accent, darkened. A role colour is text on Discord's light theme too, where the accent itself
+has almost no contrast against white."""
 
 
 @dataclass(frozen=True)
 class RoleSpec:
     key: str
     name: str
-    colour: int = ACCENT
+    colour: int = ROLE_COLOUR
     """Shown wherever the role is mentioned, so a release ping is recognisable at a glance."""
 
 
