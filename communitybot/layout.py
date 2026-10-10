@@ -150,7 +150,7 @@ async def ensure_message(
     *,
     fingerprint: str,
     make_view: Callable[[], discord.ui.LayoutView],
-    make_file: Callable[[], discord.File] | None = None,
+    make_files: Callable[[], list[discord.File]] | None = None,
     verify: bool = False,
 ) -> None:
     """Keep exactly one message per key: post it once, edit it when its content changed, repost if deleted.
@@ -170,13 +170,13 @@ async def ensure_message(
         if message is not None and unchanged:
             return
         if message is not None:
-            attachments = [make_file()] if make_file else discord.utils.MISSING
+            attachments = make_files() if make_files else discord.utils.MISSING
             await message.edit(view=make_view(), attachments=attachments)
             state.messages[key] = MessageState(message.id, fingerprint)
             save()
             return
 
-    files = [make_file()] if make_file else discord.utils.MISSING
+    files = make_files() if make_files else discord.utils.MISSING
     sent = await channel.send(view=make_view(), files=files)
     state.messages[key] = MessageState(sent.id, fingerprint)
     save()

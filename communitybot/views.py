@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord import ui
 
-from .definition import ACCENT
+from . import messages
 from .projects import BY_SLUG, PROJECTS
 
 if TYPE_CHECKING:
@@ -39,6 +39,7 @@ class NotifyButton(
             discord.ui.Button(
                 label=project.name if project else slug,
                 style=discord.ButtonStyle.secondary,
+                emoji=messages.button_icon(slug),
                 custom_id=f"{PREFIX}{slug}",
             )
         )
@@ -82,10 +83,10 @@ async def toggle(bot: CommunityBot, interaction: discord.Interaction, slug: str)
 
 def picker() -> ui.LayoutView:
     """The notification card: a short explanation and one button per project."""
-    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=messages.SKY)
+    container.add_item(messages.picture("head-notify.png", "Notifications"))
     container.add_item(
         ui.TextDisplay(
-            "## Release notifications\n"
             "Press a button to be pinged when that project ships a release. "
             "Press it again to stop. Only you see the answer."
         )

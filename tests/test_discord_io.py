@@ -568,7 +568,7 @@ class TestOrderCategories:
         assert categories["category:info"].edit.await_args.kwargs["position"] == 1
 
 
-class TestAvatar:
+class TestProfile:
     def bot_with_user(self, tmp_path: Path, avatar: object) -> tuple[CommunityBot, MagicMock]:
         bot = make_bot(tmp_path)
         user = MagicMock()
@@ -577,24 +577,65 @@ class TestAvatar:
         bot._connection.user = user
         return bot, user
 
-    async def test_set_once_when_the_bot_has_none(self, tmp_path: Path) -> None:
+    async def test_avatar_and_banner_are_set_once(self, tmp_path: Path) -> None:
         bot, user = self.bot_with_user(tmp_path, None)
-        await bot._set_avatar()
-        user.edit.assert_awaited_once()
-        assert user.edit.await_args.kwargs["avatar"].startswith(b"\x89PNG")
+        await bot._set_profile()
+        await bot._set_profile()
+        assert [list(call.kwargs) for call in user.edit.await_args_list] == [
+            ["avatar"],
+            ["banner"],
+            ["avatar"],
+        ]
+        assert user.edit.await_args_list[1].kwargs["banner"].startswith(b"\x89PNG")
 
     async def test_existing_avatar_is_left_alone(self, tmp_path: Path) -> None:
         bot, user = self.bot_with_user(tmp_path, object())
-        await bot._set_avatar()
-        user.edit.assert_not_awaited()
+        await bot._set_profile()
+        assert [list(call.kwargs) for call in user.edit.await_args_list] == [["banner"]]
 
-    async def test_rate_limit_is_only_logged(self, tmp_path: Path) -> None:
-        bot, user = self.bot_with_user(tmp_path, None)
+    async def test_rate_limit_is_only_logged_and_tried_again(self, tmp_path: Path) -> None:
+        bot, user = self.bot_with_user(tmp_path, object())
         user.edit.side_effect = http_error()
-        await bot._set_avatar()
+        await bot._set_profile()
+        assert bot.state.done == set()
 
 
-async def test_messages_are_posted_as_layouts_and_old_embed_messages_are_retired(tmp_path: Path) -> None:
+class TestIcons:
+    @pytest.fixture(autouse=True)
+    def clean(self) -> Any:
+        yield
+        messages.ICONS.clear()
+
+    def emoji(self, name: str) -> Any:
+        class Emoji:
+            def __init__(self) -> None:
+                self.name = name
+
+            def __str__(self) -> str:
+                return f"<:{name}:7>"
+
+        return Emoji()
+
+    async def test_missing_emojis_are_created_and_existing_ones_reused(self, tmp_path: Path) -> None:
+        bot = make_bot(tmp_path)
+        bot.fetch_application_emojis = AsyncMock(return_value=[self.emoji("dejabuilt")])  # type: ignore[method-assign]
+        bot.create_application_emoji = AsyncMock(  # type: ignore[method-assign]
+            side_effect=lambda *, name, image: self.emoji(name)
+        )
+        await bot._load_icons()
+        created = [call.kwargs["name"] for call in bot.create_application_emoji.await_args_list]
+        assert created == ["proxy_scraper", "spillage", "repoatlas", "gha_preview"]
+        assert messages.ICONS["dejabuilt"] == "<:dejabuilt:7>"
+        assert set(messages.ICONS) == {project.slug for project in PROJECTS}
+
+    async def test_without_emojis_the_bot_carries_on(self, tmp_path: Path) -> None:
+        bot = make_bot(tmp_path)
+        bot.fetch_application_emojis = AsyncMock(side_effect=http_error())  # type: ignore[method-assign]
+        await bot._load_icons()
+        assert messages.ICONS == {}
+
+
+async def test_messages_are_posted_with_their_pictures_and_old_ones_are_retired(tmp_path: Path) -> None:
     bot = make_bot(tmp_path)
     guild = FakeGuild()
     channel = MagicMock(spec=discord.TextChannel)
@@ -606,21 +647,26 @@ async def test_messages_are_posted_as_layouts_and_old_embed_messages_are_retired
     guild.things[66] = channel
     bot.state.resources[definition.WELCOME] = 66
     bot.state.messages["message:welcome"] = MessageState(1, "old")
-    bot.state.messages["message:projects"] = MessageState(2, "old")
-    bot.state.messages["message:picker"] = MessageState(3, "old")
+    bot.state.messages["message:projects:2"] = MessageState(2, "old")
+    bot.state.messages["message:picker:2"] = MessageState(3, "old")
 
     await bot._update_messages(guild)  # type: ignore[arg-type]
 
     assert old.delete.await_count == 3
-    assert sorted(bot.state.messages) == ["message:picker:2", "message:projects:2", "message:welcome:2"]
-    assert channel.send.await_count == 3
+    assert list(bot.state.messages) == [
+        "message:welcome:3",
+        "message:rules:1",
+        "message:projects:3",
+        "message:picker:3",
+    ]
+    assert channel.send.await_count == 4
     for call in channel.send.await_args_list:
         assert isinstance(call.kwargs["view"], discord.ui.LayoutView)
-        assert "embeds" not in call.kwargs
+        assert [file.filename for file in call.kwargs["files"]] == messages.pictures(call.kwargs["view"])
     assert channel.send.await_args_list[0].kwargs["files"][0].filename == "banner.png"
 
     await bot._update_messages(guild)  # type: ignore[arg-type]
-    assert channel.send.await_count == 3  # nothing changed, nothing is sent again
+    assert channel.send.await_count == 4  # nothing changed, nothing is sent again
 
 
 class TestTintRoles:
@@ -635,10 +681,10 @@ class TestTintRoles:
     async def test_owned_role_gets_the_colour(self) -> None:
         guild, state, role = self.guild_with_role(0)
         await layout.tint_roles(guild, state, definition.SERVER.roles)  # type: ignore[arg-type]
-        assert role.edit.await_args.kwargs["colour"].value == definition.ROLE_COLOUR
+        assert role.edit.await_args.kwargs["colour"].value == PROJECT.colour
 
     async def test_role_with_the_right_colour_is_not_edited(self) -> None:
-        guild, state, role = self.guild_with_role(definition.ROLE_COLOUR)
+        guild, state, role = self.guild_with_role(PROJECT.colour)
         await layout.tint_roles(guild, state, definition.SERVER.roles)  # type: ignore[arg-type]
         role.edit.assert_not_awaited()
 
@@ -662,7 +708,7 @@ class TestStarterCards:
         assert general.send.await_count == 1
         assert help_channel.send.await_count == 1
         assert "<#62>" in messages.text_of(general.send.await_args.kwargs["view"])
-        assert "Asking for help" in messages.text_of(help_channel.send.await_args.kwargs["view"])
+        assert messages.pictures(help_channel.send.await_args.kwargs["view"]) == ["head-help.png"]
 
 
 class TestCatchUp:
@@ -683,6 +729,7 @@ class TestCatchUp:
         assert channel.send.await_count == 1
         sent = channel.send.await_args.kwargs
         assert messages.text_of(sent["view"]).startswith("## dejabuilt v2")
+        assert [file.filename for file in sent["files"]] == ["dejabuilt.png"]
         assert "<@" not in messages.text_of(sent["view"])
         assert "allowed_mentions" not in sent
 
@@ -714,3 +761,61 @@ class TestCatchUp:
         bot = make_bot(tmp_path)
         await bot._announce(FakeGuild(), PROJECT, [make_release(1)])  # type: ignore[arg-type]
         assert bot.state.done == set()
+
+
+class TestReplacePlainCatchUp:
+    OLD = frozenset("catch-up:" + project.slug for project in PROJECTS)
+
+    def setup(
+        self, tmp_path: Path, done: frozenset[str], authors: list[int], pinged: int | None = None
+    ) -> tuple[CommunityBot, FakeGuild, list[MagicMock]]:
+        bot, guild = make_bot(tmp_path), FakeGuild()
+        bot._connection.user = MagicMock(id=5)
+        bot.state.done = set(done)
+        posts = []
+        for index, author in enumerate(authors):
+            post = MagicMock(role_mentions=[object()] if index == pinged else [])
+            post.author.id = author
+            post.delete = AsyncMock()
+            posts.append(post)
+
+        async def history(limit: int) -> Any:
+            for post in posts[:limit]:
+                yield post
+
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.history = history
+        guild.things[55] = channel
+        bot.state.resources[definition.ANNOUNCEMENTS] = 55
+        return bot, guild, posts
+
+    async def test_plain_posts_are_removed_once_and_their_projects_caught_up_again(
+        self, tmp_path: Path
+    ) -> None:
+        bot, guild, posts = self.setup(tmp_path, self.OLD, [5] * len(PROJECTS))
+        await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
+        await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
+        assert [post.delete.await_count for post in posts] == [1] * len(PROJECTS)
+        assert bot.state.done == {"replace-plain-catch-up"}
+
+    @pytest.mark.parametrize(
+        ("authors", "pinged"),
+        [
+            ([5] * (len(PROJECTS) + 1), None),  # more posts than catch-ups: something was announced
+            ([5, 5, 6], None),  # somebody else wrote
+            ([5, 5, 5], 0),  # a real announcement
+        ],
+    )
+    async def test_anything_else_in_the_channel_and_nothing_is_touched(
+        self, tmp_path: Path, authors: list[int], pinged: int | None
+    ) -> None:
+        bot, guild, posts = self.setup(tmp_path, self.OLD, authors, pinged)
+        await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
+        assert all(post.delete.await_count == 0 for post in posts)
+        assert bot.state.done == self.OLD | {"replace-plain-catch-up"}
+
+    async def test_a_new_server_is_left_alone(self, tmp_path: Path) -> None:
+        bot, guild, posts = self.setup(tmp_path, frozenset(), [5, 5])
+        await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
+        assert all(post.delete.await_count == 0 for post in posts)
+        assert bot.state.done == {"replace-plain-catch-up"}

@@ -15,7 +15,7 @@ from communitybot.plan import (
 )
 
 SPEC = ServerSpec(
-    roles=(RoleSpec("role:a", "a releases"),),
+    roles=(RoleSpec("role:a", "a releases", 0x123456),),
     categories=(
         CategorySpec(
             "category:info",
