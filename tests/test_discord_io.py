@@ -330,11 +330,11 @@ class TestAnnounce:
         bot.state.resources[PROJECT.role_key] = 77
         return guild, channel, role
 
-    async def test_first_look_is_a_baseline_and_announces_nothing(self, tmp_path: Path) -> None:
+    async def test_first_look_is_a_baseline_and_pings_nobody(self, tmp_path: Path) -> None:
         bot = make_bot(tmp_path)
         guild, channel, _ = self.guild_with_channel(bot)
         await bot._announce(guild, PROJECT, [make_release(1), make_release(2)])  # type: ignore[arg-type]
-        channel.send.assert_not_awaited()
+        assert all("allowed_mentions" not in call.kwargs for call in channel.send.await_args_list)
         assert bot.state.repo("dejabuilt").baselined is True
         assert bot.state.repo("dejabuilt").seen == [1, 2]
 
@@ -342,6 +342,7 @@ class TestAnnounce:
         bot = make_bot(tmp_path)
         guild, channel, role = self.guild_with_channel(bot)
         await bot._announce(guild, PROJECT, [make_release(1)])  # type: ignore[arg-type]
+        channel.send.reset_mock()
         found = [make_release(2, body="@everyone new"), make_release(1)]
         await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
         await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
@@ -620,3 +621,96 @@ async def test_messages_are_posted_as_layouts_and_old_embed_messages_are_retired
 
     await bot._update_messages(guild)  # type: ignore[arg-type]
     assert channel.send.await_count == 3  # nothing changed, nothing is sent again
+
+
+class TestTintRoles:
+    def guild_with_role(self, colour: int) -> tuple[FakeGuild, State, MagicMock]:
+        guild, state = FakeGuild(), State()
+        role = MagicMock(spec=discord.Role)
+        role.colour = discord.Colour(colour)
+        guild.things[41] = role
+        state.resources[PROJECT.role_key] = 41
+        return guild, state, role
+
+    async def test_owned_role_gets_the_colour(self) -> None:
+        guild, state, role = self.guild_with_role(0)
+        await layout.tint_roles(guild, state, definition.SERVER.roles)  # type: ignore[arg-type]
+        assert role.edit.await_args.kwargs["colour"].value == definition.ROLE_COLOUR
+
+    async def test_role_with_the_right_colour_is_not_edited(self) -> None:
+        guild, state, role = self.guild_with_role(definition.ROLE_COLOUR)
+        await layout.tint_roles(guild, state, definition.SERVER.roles)  # type: ignore[arg-type]
+        role.edit.assert_not_awaited()
+
+
+class TestStarterCards:
+    async def test_open_channels_get_one_card_each_and_keep_it(self, tmp_path: Path) -> None:
+        bot = make_bot(tmp_path)
+        guild = FakeGuild()
+        channels = {}
+        for index, key in enumerate((definition.WELCOME, definition.GENERAL, definition.HELP)):
+            channel = MagicMock(spec=discord.TextChannel)
+            channel.send = AsyncMock(return_value=MagicMock(id=700 + index))
+            guild.things[60 + index] = channel
+            bot.state.resources[key] = 60 + index
+            channels[key] = channel
+
+        await bot._update_messages(guild)  # type: ignore[arg-type]
+        await bot._update_messages(guild)  # type: ignore[arg-type]
+
+        general, help_channel = channels[definition.GENERAL], channels[definition.HELP]
+        assert general.send.await_count == 1
+        assert help_channel.send.await_count == 1
+        assert "<#62>" in messages.text_of(general.send.await_args.kwargs["view"])
+        assert "Asking for help" in messages.text_of(help_channel.send.await_args.kwargs["view"])
+
+
+class TestCatchUp:
+    def bot_with_channel(self, tmp_path: Path) -> tuple[CommunityBot, FakeGuild, MagicMock]:
+        bot, guild = make_bot(tmp_path), FakeGuild()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        guild.things[55] = channel
+        bot.state.resources[definition.ANNOUNCEMENTS] = 55
+        return bot, guild, channel
+
+    async def test_first_look_shows_the_latest_release_once_without_a_ping(self, tmp_path: Path) -> None:
+        bot, guild, channel = self.bot_with_channel(tmp_path)
+        found = [make_release(1), make_release(2)]
+        await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
+        await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
+
+        assert channel.send.await_count == 1
+        sent = channel.send.await_args.kwargs
+        assert messages.text_of(sent["view"]).startswith("## dejabuilt v2")
+        assert "<@" not in messages.text_of(sent["view"])
+        assert "allowed_mentions" not in sent
+
+    async def test_it_is_remembered_across_a_restart(self, tmp_path: Path) -> None:
+        bot, guild, channel = self.bot_with_channel(tmp_path)
+        await bot._announce(guild, PROJECT, [make_release(1)])  # type: ignore[arg-type]
+        again = make_bot(tmp_path)
+        await again._announce(guild, PROJECT, [make_release(1)])  # type: ignore[arg-type]
+        assert channel.send.await_count == 1
+
+    async def test_a_release_that_is_announced_is_not_shown_a_second_time(self, tmp_path: Path) -> None:
+        # An installation from before this job existed, with a release waiting.
+        bot, guild, channel = self.bot_with_channel(tmp_path)
+        repo = bot.state.repo(PROJECT.slug)
+        repo.baselined, repo.seen = True, [1]
+        found = [make_release(1), make_release(2)]
+        await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
+        await bot._announce(guild, PROJECT, found)  # type: ignore[arg-type]
+        assert channel.send.await_count == 1
+        assert "allowed_mentions" in channel.send.await_args.kwargs
+
+    async def test_project_without_a_release_shows_nothing_and_is_done(self, tmp_path: Path) -> None:
+        bot, guild, channel = self.bot_with_channel(tmp_path)
+        await bot._announce(guild, PROJECT, [])  # type: ignore[arg-type]
+        channel.send.assert_not_awaited()
+        assert bot.state.done == {"catch-up:dejabuilt"}
+
+    async def test_without_the_channel_it_waits(self, tmp_path: Path) -> None:
+        bot = make_bot(tmp_path)
+        await bot._announce(FakeGuild(), PROJECT, [make_release(1)])  # type: ignore[arg-type]
+        assert bot.state.done == set()

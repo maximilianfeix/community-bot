@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord import ui
 
-from .messages import ACCENT
+from .definition import ACCENT
 from .projects import BY_SLUG, PROJECTS
 
 if TYPE_CHECKING:

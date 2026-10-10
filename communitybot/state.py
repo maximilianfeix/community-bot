@@ -3,6 +3,7 @@
 - which roles, categories and channels it created (the only ones it will ever change),
 - which messages it keeps up to date,
 - which releases it has already seen per repository,
+- which one-off jobs are done,
 - the last answer from GitHub per URL, so unchanged data is not downloaded again.
 
 A file that cannot be read is an error, never a fresh start: forgetting which releases were announced would
@@ -42,6 +43,8 @@ class State:
     messages: dict[str, MessageState] = field(default_factory=dict)
     repos: dict[str, RepoState] = field(default_factory=dict)
     cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    done: set[str] = field(default_factory=set)
+    """Names of jobs that run once per server and never again."""
 
     def repo(self, slug: str) -> RepoState:
         return self.repos.setdefault(slug, RepoState())
@@ -58,6 +61,7 @@ class State:
                 slug: {"baselined": r.baselined, "seen": list(r.seen)} for slug, r in self.repos.items()
             },
             "cache": self.cache,
+            "done": sorted(self.done),
         }
 
     @classmethod
@@ -78,6 +82,7 @@ class State:
                     for k, v in data.get("repos", {}).items()
                 },
                 cache={str(k): dict(v) for k, v in data.get("cache", {}).items()},
+                done={str(name) for name in data.get("done", [])},
             )
         except (AttributeError, KeyError, TypeError, ValueError) as error:
             raise StateError(f"state file has an unexpected shape ({type(error).__name__})") from None

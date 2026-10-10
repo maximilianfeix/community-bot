@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import aiohttp
@@ -27,6 +27,10 @@ AVATAR = Path(__file__).with_name("assets") / "avatar.png"
 WELCOME_MESSAGE = "message:welcome:2"
 PROJECTS_MESSAGE = "message:projects:2"
 PICKER_MESSAGE = "message:picker:2"
+HELLO_MESSAGE = "message:hello:1"
+ASK_MESSAGE = "message:ask:1"
+CATCH_UP = "catch-up:"
+"""Prefix of the one-off job per project that shows its latest release in a new server."""
 RETIRED_MESSAGES = ("message:welcome", "message:projects", "message:picker")
 """Keys of the embed messages the first version posted. They are deleted once and then forgotten."""
 REQUIRED_PERMISSIONS = discord.Permissions(
@@ -125,6 +129,7 @@ class CommunityBot(discord.Client):
         await layout.order_categories(
             guild, self.state, [category.key for category in definition.SERVER.categories]
         )
+        await layout.tint_roles(guild, self.state, definition.SERVER.roles)
         await self._set_avatar()
         await self._update_messages(guild, verify=True)
 
@@ -181,6 +186,23 @@ class CommunityBot(discord.Client):
             make_view=views.picker,
             verify=verify,
         )
+        # One card at the top of each open channel, so that neither starts empty.
+        starters: list[tuple[str, str, Callable[[], discord.ui.LayoutView]]] = [
+            (HELLO_MESSAGE, definition.GENERAL, lambda: messages.hello(channel_ids)),
+            (ASK_MESSAGE, definition.HELP, messages.ask),
+        ]
+        for key, channel_key, make in starters:
+            target = layout.text_channel(guild, self.state, channel_key)
+            if target is not None:
+                await layout.ensure_message(
+                    target,
+                    key,
+                    self.state,
+                    self.save,
+                    fingerprint=messages.fingerprint(make()),
+                    make_view=make,
+                    verify=verify,
+                )
 
     @tasks.loop(seconds=900)
     async def watch(self) -> None:
@@ -225,16 +247,18 @@ class CommunityBot(discord.Client):
 
     async def _announce(self, guild: discord.Guild, project: Project, found: list[releases.Release]) -> None:
         repo = self.state.repo(project.slug)
-        if not repo.baselined:
+        fresh: list[releases.Release] = []
+        if repo.baselined:
+            fresh = releases.new_releases(found, repo.seen)
+        else:
             repo.seen = releases.baseline(found)
             repo.baselined = True
             self.save()
-            return
         channel = layout.text_channel(guild, self.state, definition.ANNOUNCEMENTS)
         if channel is None:
             return
         role = guild.get_role(self.state.resources.get(project.role_key, 0))
-        for item in releases.new_releases(found, repo.seen):
+        for item in fresh:
             # Remember first, then post: after a crash in between, a release is skipped rather than
             # announced twice. A missed post can be made by hand; a double ping cannot be taken back.
             repo.seen.append(item.id)
@@ -248,6 +272,22 @@ class CommunityBot(discord.Client):
                 allowed_mentions=mentions,
             )
             log.info("announced a release of %s", project.slug)
+        await self._catch_up(channel, project, None if fresh else releases.latest(found))
+
+    async def _catch_up(
+        self, channel: discord.TextChannel, project: Project, item: releases.Release | None
+    ) -> None:
+        """Once per project: show its latest release without a ping, so a new server's channel is not
+        empty until the next release. Decided in the same call that announces, so the two cannot post
+        the same release: with anything new to announce, there is nothing to catch up on.
+        """
+        job = CATCH_UP + project.slug
+        if job in self.state.done:
+            return
+        self.state.done.add(job)
+        self.save()
+        if item is not None:
+            await channel.send(view=messages.release(project, item))
 
 
 def register_commands(bot: CommunityBot) -> None:

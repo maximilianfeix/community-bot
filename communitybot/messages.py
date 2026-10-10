@@ -17,11 +17,11 @@ import discord
 from discord import ui
 
 from . import sanitize
+from .definition import ACCENT, HELP
 from .github import RepoInfo
 from .projects import PROJECTS, Project
 from .releases import Release
 
-ACCENT = 0xD4F77A
 PROFILE = "https://github.com/maximilianfeix"
 BANNER_NAME = "banner.png"
 NOTES_LIMIT = 1500
@@ -134,6 +134,44 @@ def release(item_project: Project, item: Release, role_mention: str = "") -> ui.
     container.add_item(
         ui.Section(ui.TextDisplay("-# " + " · ".join(part for part in footer if part)), accessory=link)
     )
+    return _view(container)
+
+
+def hello(channels: Mapping[str, int]) -> ui.LayoutView:
+    """The first message in the chat channel, so that it does not start empty."""
+    text = (
+        "## Say hello\n"
+        "Tell us what you are building, show something you made with one of the tools, "
+        "or just read along."
+    )
+    if HELP in channels:
+        text += f"\n-# Questions go to <#{channels[HELP]}>, where they are easier to find later."
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container.add_item(ui.TextDisplay(text))
+    return _view(container)
+
+
+def ask() -> ui.LayoutView:
+    """How to ask a question that can be answered, and where bugs go instead."""
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container.add_item(
+        ui.TextDisplay(
+            "## Asking for help\n"
+            "A question gets a useful answer faster when it says:\n"
+            "- which project and which version\n"
+            "- what you ran and what you expected\n"
+            "- what happened instead, with the output as text in a code block\n\n"
+            "Remove tokens, keys and private addresses before you paste."
+        )
+    )
+    container.add_item(ui.Separator())
+    container.add_item(
+        ui.TextDisplay("-# Found a bug or want a feature? Open an issue, so it is not lost in chat.")
+    )
+    row: ui.ActionRow[ui.LayoutView] = ui.ActionRow()
+    for item in PROJECTS:
+        row.add_item(ui.Button(label=item.name, url=f"{item.url}/issues", style=discord.ButtonStyle.link))
+    container.add_item(row)
     return _view(container)
 
 

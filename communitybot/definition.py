@@ -10,11 +10,19 @@ from dataclasses import dataclass
 
 from .projects import PROJECTS
 
+ACCENT = 0xD4F77A
+"""The one colour of the server: cards, banner and avatar."""
+ROLE_COLOUR = 0x7A9E1F
+"""The accent, darkened. A role colour is text on Discord's light theme too, where the accent itself
+has almost no contrast against white."""
+
 
 @dataclass(frozen=True)
 class RoleSpec:
     key: str
     name: str
+    colour: int = ROLE_COLOUR
+    """Shown wherever the role is mentioned, so a release ping is recognisable at a glance."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,8 @@ class ServerSpec:
 
 WELCOME = "channel:welcome"
 ANNOUNCEMENTS = "channel:announcements"
+GENERAL = "channel:general"
+HELP = "channel:help"
 
 SERVER = ServerSpec(
     roles=tuple(RoleSpec(project.role_key, project.role_name) for project in PROJECTS),
@@ -70,9 +80,9 @@ SERVER = ServerSpec(
             "category:community",
             "community",
             (
-                ChannelSpec("channel:general", "general", "Talk about the projects, or anything near them."),
+                ChannelSpec(GENERAL, "general", "Talk about the projects, or anything near them."),
                 ChannelSpec(
-                    "channel:help",
+                    HELP,
                     "help",
                     "Questions about using a project. Bugs and feature requests go to GitHub.",
                 ),
