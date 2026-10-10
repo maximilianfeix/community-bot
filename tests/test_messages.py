@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -31,6 +32,31 @@ def make_release(**changes: Any) -> Release:
     return Release(**{**fields, **changes})
 
 
+EMOJI_ID = 123456789012345678
+
+
+@pytest.fixture
+def icons() -> Iterator[None]:
+    """Custom emojis as the running bot has them."""
+    messages.ICONS.update(
+        {project.slug: f"<:{project.slug.replace('-', '_')}:{EMOJI_ID}>" for project in PROJECTS}
+    )
+    yield
+    messages.ICONS.clear()
+
+
+def all_views() -> list[ui.LayoutView]:
+    return [
+        messages.welcome(CHANNELS),
+        messages.rules(),
+        messages.projects({}, {}),
+        messages.release(PROJECT, make_release()),
+        messages.hello(CHANNELS),
+        messages.ask(),
+        views.picker(),
+    ]
+
+
 def link_buttons(view: ui.LayoutView) -> list[tuple[str, str]]:
     return [
         (child.label or "", child.url or "")
@@ -54,39 +80,85 @@ class TestWelcome:
         container = view.children[0]
         assert isinstance(container, ui.Container)
         assert isinstance(container.children[0], ui.MediaGallery)
-        assert "attachment://banner.png" in str(messages.components(view))
-
-    def test_without_a_banner_file_there_is_no_gallery(self) -> None:
-        view = messages.welcome(CHANNELS, with_banner=False)
-        assert not any(isinstance(child, ui.MediaGallery) for child in view.walk_children())
-        assert "attachment://" not in str(messages.components(view))
-
-    def test_lists_every_rule_numbered(self) -> None:
-        text = messages.text_of(messages.welcome(CHANNELS))
-        for number, rule in enumerate(messages.RULES, 1):
-            assert f"{number}. {rule}" in text
+        assert messages.pictures(view) == ["banner.png"]
 
     def test_works_before_the_channels_exist(self) -> None:
-        text = messages.text_of(messages.welcome({}))
-        assert "Where things are" not in text
-        assert "### Rules" in text
+        assert "Where things are" not in messages.text_of(messages.welcome({}))
 
     def test_uses_the_accent_colour_and_stays_within_limits(self) -> None:
         view = messages.welcome(CHANNELS)
-        container = view.children[0]
-        assert isinstance(container, ui.Container)
-        assert container.accent_colour == ACCENT
         assert messages.components(view)[0]["accent_color"] == ACCENT
         assert within_limits(view)
 
 
-class TestProjects:
-    def test_every_project_has_its_heading_and_its_own_link(self) -> None:
+def test_rules_are_numbered() -> None:
+    text = messages.text_of(messages.rules())
+    for number, rule in enumerate(messages.RULES, 1):
+        assert f"{number}. {rule}" in text
+
+
+class TestPictures:
+    def test_every_card_starts_with_a_picture_that_exists(self) -> None:
+        for view in all_views():
+            for container in view.children:
+                assert isinstance(container, ui.Container)
+                assert isinstance(container.children[0], ui.MediaGallery)
+            names = messages.pictures(view)
+            assert names
+            assert all(messages.PICTURES[name].is_file() for name in names)
+
+    def test_every_picture_says_what_it_shows(self) -> None:
+        for view in all_views():
+            for child in view.walk_children():
+                if isinstance(child, ui.MediaGallery):
+                    assert all(item.description for item in child.items)
+
+    def test_files_match_the_layout_one_to_one(self) -> None:
         view = messages.projects({}, {})
+        assert [file.filename for file in messages.files(view)] == [f"{p.slug}.png" for p in PROJECTS]
+
+    def test_a_changed_picture_changes_the_fingerprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before = messages.fingerprint(messages.rules())
+        monkeypatch.setitem(messages.PICTURES, "head-rules.png", messages.PICTURES["banner.png"])
+        assert messages.fingerprint(messages.rules()) != before
+
+
+class TestIcons:
+    def test_without_emojis_nothing_refers_to_one(self) -> None:
+        for view in all_views():
+            assert "<:" not in messages.text_of(view)
+            assert all(child.emoji is None for child in view.walk_children() if isinstance(child, ui.Button))
+
+    def test_with_emojis_headings_and_buttons_carry_the_sign(self, icons: None) -> None:
+        assert messages.text_of(messages.release(PROJECT, make_release())).startswith(
+            f"## <:dejabuilt:{EMOJI_ID}> dejabuilt v0.2.1"
+        )
+        links = [child.emoji for child in messages.ask().walk_children() if isinstance(child, ui.Button)]
+        toggles = [
+            child.item.emoji
+            for child in views.picker().walk_children()
+            if isinstance(child, views.NotifyButton)
+        ]
+        for emojis in (links, toggles):
+            assert [emoji.id for emoji in emojis if emoji] == [EMOJI_ID] * len(PROJECTS)
+
+
+class TestProjects:
+    def test_every_project_is_a_card_in_its_own_colour_with_its_links(self) -> None:
+        view = messages.projects({}, {})
+        assert [card["accent_color"] for card in messages.components(view)] == [p.colour for p in PROJECTS]
         text = messages.text_of(view)
         for project in PROJECTS:
-            assert f"### {project.name}" in text
-        assert link_buttons(view) == [("GitHub", project.url) for project in PROJECTS]
+            assert project.tagline in text
+        assert link_buttons(view) == [
+            link
+            for project in PROJECTS
+            for link in (
+                ("GitHub", project.url),
+                ("Releases", f"{project.url}/releases"),
+                ("Issues", f"{project.url}/issues"),
+            )
+        ]
 
     def test_line_with_data(self) -> None:
         line = messages.project_line(PROJECT, RepoInfo(1234, "", False), make_release())
@@ -107,8 +179,9 @@ class TestProjects:
 
     def test_single_project_card(self) -> None:
         view = messages.project(PROJECT, RepoInfo(7, "", False), None)
-        assert "### dejabuilt" in messages.text_of(view)
-        assert link_buttons(view) == [("GitHub", f"https://github.com/{OWNER}/dejabuilt")]
+        assert "★ 7" in messages.text_of(view)
+        assert link_buttons(view)[0] == ("GitHub", f"https://github.com/{OWNER}/dejabuilt")
+        assert messages.pictures(view) == ["dejabuilt.png"]
 
 
 class TestRelease:
@@ -153,7 +226,6 @@ class TestRelease:
 class TestStarterCards:
     def test_hello_points_to_the_help_channel(self) -> None:
         text = messages.text_of(messages.hello(CHANNELS))
-        assert text.startswith("## Say hello")
         assert f"<#{CHANNELS['channel:help']}>" in text
 
     def test_hello_works_before_the_channels_exist(self) -> None:
@@ -221,6 +293,7 @@ def test_project_registry_is_consistent() -> None:
     slugs = [project.slug for project in PROJECTS]
     assert len(set(slugs)) == len(slugs)
     assert all(len(project.tagline) <= 180 for project in PROJECTS)
+    assert len({project.colour for project in PROJECTS}) == len(PROJECTS)
     assert {role.key for role in SERVER.roles} == {project.role_key for project in PROJECTS}
 
 

@@ -1,8 +1,11 @@
 """Everything the bot posts, built with Discord's layout components. Nothing here talks to Discord.
 
 Layout components instead of embeds: a container is as wide as the channel allows, so the cards line up,
-a banner can sit at the top, and buttons can stand next to the text they belong to. A message built this
+a picture can sit at the top, and buttons can stand next to the text they belong to. A message built this
 way has no separate text or embeds, so a ping has to be written into the layout itself.
+
+Every card starts with a picture from `assets/`. A layout only names its pictures; `files` turns the names
+into uploads, so a card and its attachments cannot drift apart.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import discord
@@ -23,10 +27,23 @@ from .projects import PROJECTS, Project
 from .releases import Release
 
 PROFILE = "https://github.com/maximilianfeix"
-BANNER_NAME = "banner.png"
 NOTES_LIMIT = 1500
-FORMAT = "layout-1"
+FORMAT = "layout-2"
 """Part of every fingerprint. Change it to have all maintained messages rebuilt."""
+
+CORAL, SKY, AMBER, VIOLET = 0xF7927A, 0x7AD7F7, 0xF7D27A, 0xB49AF7
+
+ART = Path(__file__).with_name("assets")
+PICTURES: dict[str, Path] = {
+    "banner.png": ART / "banner.png",
+    **{f"head-{name}.png": ART / "headings" / f"{name}.png" for name in ("rules", "notify", "help", "hello")},
+    **{f"{project.slug}.png": ART / "projects" / f"{project.slug}.png" for project in PROJECTS},
+}
+"""Attachment name to file. Names are unique, because one message can carry several."""
+
+ICONS: dict[str, str] = {}
+"""Project slug to the markup of its custom emoji. Filled by the bot once the emojis exist; while it is
+empty, everything is simply shown without icons."""
 
 RULES = (
     "Be respectful. No harassment, hate or personal attacks.",
@@ -43,14 +60,24 @@ PLACES = (
 )
 
 
-def welcome(channels: Mapping[str, int], with_banner: bool = True) -> ui.LayoutView:
-    """The first thing a new member reads: what this is, where to go, the rules."""
+def picture(name: str, description: str) -> ui.MediaGallery[ui.LayoutView]:
+    """A picture across the full width of a card. The description is what a screen reader says."""
+    return ui.MediaGallery(discord.MediaGalleryItem(f"attachment://{name}", description=description))
+
+
+def icon(slug: str) -> str:
+    """The project's emoji for running text, with the space after it; empty while there is none."""
+    return f"{ICONS[slug]} " if slug in ICONS else ""
+
+
+def button_icon(slug: str) -> discord.PartialEmoji | None:
+    return discord.PartialEmoji.from_str(ICONS[slug]) if slug in ICONS else None
+
+
+def welcome(channels: Mapping[str, int]) -> ui.LayoutView:
+    """The first thing a new member reads: what this is and where to go."""
     container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
-    if with_banner:
-        banner = discord.MediaGalleryItem(
-            f"attachment://{BANNER_NAME}", description="maximilianfeix open source"
-        )
-        container.add_item(ui.MediaGallery(banner))
+    container.add_item(picture("banner.png", "maximilianfeix open source"))
     container.add_item(
         ui.TextDisplay(
             "# Welcome\n"
@@ -63,9 +90,13 @@ def welcome(channels: Mapping[str, int], with_banner: bool = True) -> ui.LayoutV
     if where:
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.large))
         container.add_item(ui.TextDisplay("### Where things are\n" + "\n".join(where)))
-    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.large))
-    rules = "\n".join(f"{number}. {rule}" for number, rule in enumerate(RULES, 1))
-    container.add_item(ui.TextDisplay("### Rules\n" + rules))
+    return _view(container)
+
+
+def rules() -> ui.LayoutView:
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=CORAL)
+    container.add_item(picture("head-rules.png", "Rules"))
+    container.add_item(ui.TextDisplay("\n".join(f"{number}. {rule}" for number, rule in enumerate(RULES, 1))))
     container.add_item(ui.TextDisplay("-# Chat here is public. Anything worth keeping is copied to GitHub."))
     return _view(container)
 
@@ -84,32 +115,35 @@ def project_line(project: Project, info: RepoInfo | None, latest: Release | None
     return " · ".join(parts)
 
 
-def _project_section(
+def _project_card(
     project: Project, info: RepoInfo | None, latest: Release | None
-) -> ui.Section[ui.LayoutView]:
-    text = f"### {project.name}\n{project.tagline}\n-# {project_line(project, info, latest)}"
-    button: ui.Button[ui.LayoutView] = ui.Button(
-        label="GitHub", url=project.url, style=discord.ButtonStyle.link
+) -> ui.Container[ui.LayoutView]:
+    """One project in its own colour: picture, what it does, where to go."""
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=project.colour)
+    container.add_item(picture(f"{project.slug}.png", f"{project.name}: {project.short}"))
+    container.add_item(ui.TextDisplay(f"{project.tagline}\n-# {project_line(project, info, latest)}"))
+    row: ui.ActionRow[ui.LayoutView] = ui.ActionRow()
+    row.add_item(
+        ui.Button(
+            label="GitHub", url=project.url, style=discord.ButtonStyle.link, emoji=button_icon(project.slug)
+        )
     )
-    return ui.Section(ui.TextDisplay(text), accessory=button)
+    row.add_item(ui.Button(label="Releases", url=f"{project.url}/releases", style=discord.ButtonStyle.link))
+    row.add_item(ui.Button(label="Issues", url=f"{project.url}/issues", style=discord.ButtonStyle.link))
+    container.add_item(row)
+    return container
 
 
 def projects(info: Mapping[str, RepoInfo], latest: Mapping[str, Release | None]) -> ui.LayoutView:
-    """Every project in one card, each with its own link."""
-    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
-    container.add_item(ui.TextDisplay("## Projects"))
-    for index, project in enumerate(PROJECTS):
-        if index:
-            container.add_item(ui.Separator())
-        container.add_item(_project_section(project, info.get(project.slug), latest.get(project.slug)))
-    return _view(container)
+    """Every project as its own card, all in one message."""
+    return _view(
+        *(_project_card(project, info.get(project.slug), latest.get(project.slug)) for project in PROJECTS)
+    )
 
 
 def project(item: Project, info: RepoInfo | None, latest: Release | None) -> ui.LayoutView:
     """One project, for the /project command."""
-    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
-    container.add_item(_project_section(item, info, latest))
-    return _view(container)
+    return _view(_project_card(item, info, latest))
 
 
 def release(item_project: Project, item: Release, role_mention: str = "") -> ui.LayoutView:
@@ -120,10 +154,11 @@ def release(item_project: Project, item: Release, role_mention: str = "") -> ui.
     """
     tag = sanitize.one_line(item.tag, 60)
     name = sanitize.one_line(item.name, 120)
-    heading = f"## {item_project.name} {tag}".strip()
+    heading = f"## {icon(item_project.slug)}{item_project.name} {tag}".strip()
     if name and name != tag:
         heading += f"\n-# {name}"
-    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=item_project.colour)
+    container.add_item(picture(f"{item_project.slug}.png", f"{item_project.name}: {item_project.short}"))
     container.add_item(ui.TextDisplay(heading))
     container.add_item(ui.TextDisplay(sanitize.notes(item.body, NOTES_LIMIT) or "No release notes."))
     container.add_item(ui.Separator())
@@ -139,24 +174,21 @@ def release(item_project: Project, item: Release, role_mention: str = "") -> ui.
 
 def hello(channels: Mapping[str, int]) -> ui.LayoutView:
     """The first message in the chat channel, so that it does not start empty."""
-    text = (
-        "## Say hello\n"
-        "Tell us what you are building, show something you made with one of the tools, "
-        "or just read along."
-    )
+    text = "Tell us what you are building, show something you made with one of the tools, or just read along."
     if HELP in channels:
         text += f"\n-# Questions go to <#{channels[HELP]}>, where they are easier to find later."
-    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=VIOLET)
+    container.add_item(picture("head-hello.png", "Say hello"))
     container.add_item(ui.TextDisplay(text))
     return _view(container)
 
 
 def ask() -> ui.LayoutView:
     """How to ask a question that can be answered, and where bugs go instead."""
-    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=AMBER)
+    container.add_item(picture("head-help.png", "Help"))
     container.add_item(
         ui.TextDisplay(
-            "## Asking for help\n"
             "A question gets a useful answer faster when it says:\n"
             "- which project and which version\n"
             "- what you ran and what you expected\n"
@@ -170,15 +202,40 @@ def ask() -> ui.LayoutView:
     )
     row: ui.ActionRow[ui.LayoutView] = ui.ActionRow()
     for item in PROJECTS:
-        row.add_item(ui.Button(label=item.name, url=f"{item.url}/issues", style=discord.ButtonStyle.link))
+        row.add_item(
+            ui.Button(
+                label=item.name,
+                url=f"{item.url}/issues",
+                style=discord.ButtonStyle.link,
+                emoji=button_icon(item.slug),
+            )
+        )
     container.add_item(row)
     return _view(container)
 
 
+def pictures(view: ui.LayoutView) -> list[str]:
+    """The attachment names a layout refers to, in order, each once."""
+    names: list[str] = []
+    for child in view.walk_children():
+        if isinstance(child, ui.MediaGallery):
+            for item in child.items:
+                name = item.media.url.removeprefix("attachment://")
+                if name != item.media.url and name not in names:
+                    names.append(name)
+    return names
+
+
+def files(view: ui.LayoutView) -> list[discord.File]:
+    """The uploads a layout needs. Send them with it, or its pictures stay empty."""
+    return [discord.File(PICTURES[name], filename=name) for name in pictures(view)]
+
+
 def fingerprint(view: ui.LayoutView, extra: str = "") -> str:
-    """A stable hash of what a message shows, to tell whether it has to be edited."""
+    """A stable hash of what a message shows, pictures included, to tell whether it has to be edited."""
     payload = json.dumps(components(view), sort_keys=True, default=str)
-    return hashlib.sha256(f"{FORMAT}\n{payload}\n{extra}".encode()).hexdigest()[:32]
+    sizes = [PICTURES[name].stat().st_size for name in pictures(view)]
+    return hashlib.sha256(f"{FORMAT}\n{payload}\n{sizes}\n{extra}".encode()).hexdigest()[:32]
 
 
 def components(view: ui.LayoutView) -> list[dict[str, Any]]:
@@ -191,9 +248,10 @@ def text_of(view: ui.LayoutView) -> str:
     return "\n".join(child.content for child in view.walk_children() if isinstance(child, ui.TextDisplay))
 
 
-def _view(container: ui.Container[ui.LayoutView]) -> ui.LayoutView:
+def _view(*containers: ui.Container[ui.LayoutView]) -> ui.LayoutView:
     view = ui.LayoutView(timeout=None)
-    view.add_item(container)
+    for container in containers:
+        view.add_item(container)
     return view
 
 

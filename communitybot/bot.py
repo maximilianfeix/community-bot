@@ -21,18 +21,30 @@ from .projects import BY_SLUG, PROJECTS, Project
 
 log = logging.getLogger(__name__)
 
-BANNER = Path(__file__).with_name("assets") / messages.BANNER_NAME
-AVATAR = Path(__file__).with_name("assets") / "avatar.png"
+ASSETS = Path(__file__).with_name("assets")
+AVATAR = ASSETS / "avatar.png"
+PROFILE_BANNER = ASSETS / "profile.png"
 
-WELCOME_MESSAGE = "message:welcome:2"
-PROJECTS_MESSAGE = "message:projects:2"
-PICKER_MESSAGE = "message:picker:2"
+WELCOME_MESSAGE = "message:welcome:3"
+RULES_MESSAGE = "message:rules:1"
+PROJECTS_MESSAGE = "message:projects:3"
+PICKER_MESSAGE = "message:picker:3"
 HELLO_MESSAGE = "message:hello:1"
 ASK_MESSAGE = "message:ask:1"
-CATCH_UP = "catch-up:"
+RETIRED_MESSAGES = (
+    "message:welcome",
+    "message:projects",
+    "message:picker",
+    "message:welcome:2",
+    "message:projects:2",
+    "message:picker:2",
+)
+"""Keys of earlier versions of the messages in #welcome. They are deleted once, so that the current ones
+appear in order, and then forgotten."""
+CATCH_UP = "catch-up:2:"
 """Prefix of the one-off job per project that shows its latest release in a new server."""
-RETIRED_MESSAGES = ("message:welcome", "message:projects", "message:picker")
-"""Keys of the embed messages the first version posted. They are deleted once and then forgotten."""
+REPLACE_PLAIN_CATCH_UP = "replace-plain-catch-up"
+PROFILE_BANNER_SET = "profile-banner"
 REQUIRED_PERMISSIONS = discord.Permissions(
     view_channel=True,
     send_messages=True,
@@ -130,23 +142,67 @@ class CommunityBot(discord.Client):
             guild, self.state, [category.key for category in definition.SERVER.categories]
         )
         await layout.tint_roles(guild, self.state, definition.SERVER.roles)
-        await self._set_avatar()
+        await self._set_profile()
+        await self._load_icons()
         await self._update_messages(guild, verify=True)
 
-    async def _set_avatar(self) -> None:
-        """Give the bot its picture once. Avatar changes are rate limited, so a failure is only logged."""
-        if self.user is None or self.user.avatar is not None or not AVATAR.exists():
+    async def _set_profile(self) -> None:
+        """Give the bot its picture and its banner once. Both are rate limited, so a failure is only
+        logged."""
+        if self.user is None:
             return
         try:
-            await self.user.edit(avatar=AVATAR.read_bytes())
+            if self.user.avatar is None and AVATAR.exists():
+                await self.user.edit(avatar=AVATAR.read_bytes())
+            if PROFILE_BANNER_SET not in self.state.done and PROFILE_BANNER.exists():
+                await self.user.edit(banner=PROFILE_BANNER.read_bytes())
+                self.state.done.add(PROFILE_BANNER_SET)
+                self.save()
         except discord.HTTPException as error:
-            log.warning("could not set the avatar: %s", type(error).__name__)
+            log.warning("could not set the profile: %s", type(error).__name__)
+
+    async def _load_icons(self) -> None:
+        """Make sure every project's sign exists as an emoji of this application, and tell the messages.
+
+        Application emojis need no server slot and no permission. Without them everything still works,
+        only without icons, so a failure is logged and nothing more.
+        """
+        try:
+            existing = {emoji.name: emoji for emoji in await self.fetch_application_emojis()}
+            for project in PROJECTS:
+                name = project.slug.replace("-", "_")
+                emoji = existing.get(name)
+                source = ASSETS / "emoji" / f"{project.slug}.png"
+                if emoji is None and source.exists():
+                    emoji = await self.create_application_emoji(name=name, image=source.read_bytes())
+                if emoji is not None:
+                    messages.ICONS[project.slug] = str(emoji)
+        except discord.HTTPException as error:
+            log.warning("could not load the emojis: %s", type(error).__name__)
+
+    async def _keep(
+        self,
+        channel: discord.TextChannel,
+        key: str,
+        make: Callable[[], discord.ui.LayoutView],
+        verify: bool,
+    ) -> None:
+        """Keep one message current: the layout and the pictures it refers to."""
+        await layout.ensure_message(
+            channel,
+            key,
+            self.state,
+            self.save,
+            fingerprint=messages.fingerprint(make()),
+            make_view=make,
+            make_files=lambda: messages.files(make()),
+            verify=verify,
+        )
 
     async def _update_messages(self, guild: discord.Guild, verify: bool = False) -> None:
         channel = layout.text_channel(guild, self.state, definition.WELCOME)
         if channel is None:
             return
-        # Messages from before the layout format: remove them, so the new ones appear in order.
         for old_key in RETIRED_MESSAGES:
             await layout.retire_message(channel, old_key, self.state, self.save)
         channel_ids = {
@@ -154,38 +210,10 @@ class CommunityBot(discord.Client):
             for key in definition.SERVER.channel_keys()
             if key in self.state.resources
         }
-        has_banner = BANNER.exists()
-        await layout.ensure_message(
-            channel,
-            WELCOME_MESSAGE,
-            self.state,
-            self.save,
-            fingerprint=messages.fingerprint(
-                messages.welcome(channel_ids, has_banner),
-                extra=str(BANNER.stat().st_size) if has_banner else "",
-            ),
-            make_view=lambda: messages.welcome(channel_ids, has_banner),
-            make_file=(lambda: discord.File(BANNER, filename=messages.BANNER_NAME)) if has_banner else None,
-            verify=verify,
-        )
-        await layout.ensure_message(
-            channel,
-            PROJECTS_MESSAGE,
-            self.state,
-            self.save,
-            fingerprint=messages.fingerprint(messages.projects(self.info, self.latest)),
-            make_view=lambda: messages.projects(self.info, self.latest),
-            verify=verify,
-        )
-        await layout.ensure_message(
-            channel,
-            PICKER_MESSAGE,
-            self.state,
-            self.save,
-            fingerprint=messages.fingerprint(views.picker()),
-            make_view=views.picker,
-            verify=verify,
-        )
+        await self._keep(channel, WELCOME_MESSAGE, lambda: messages.welcome(channel_ids), verify)
+        await self._keep(channel, RULES_MESSAGE, messages.rules, verify)
+        await self._keep(channel, PROJECTS_MESSAGE, lambda: messages.projects(self.info, self.latest), verify)
+        await self._keep(channel, PICKER_MESSAGE, views.picker, verify)
         # One card at the top of each open channel, so that neither starts empty.
         starters: list[tuple[str, str, Callable[[], discord.ui.LayoutView]]] = [
             (HELLO_MESSAGE, definition.GENERAL, lambda: messages.hello(channel_ids)),
@@ -194,15 +222,7 @@ class CommunityBot(discord.Client):
         for key, channel_key, make in starters:
             target = layout.text_channel(guild, self.state, channel_key)
             if target is not None:
-                await layout.ensure_message(
-                    target,
-                    key,
-                    self.state,
-                    self.save,
-                    fingerprint=messages.fingerprint(make()),
-                    make_view=make,
-                    verify=verify,
-                )
+                await self._keep(target, key, make, verify)
 
     @tasks.loop(seconds=900)
     async def watch(self) -> None:
@@ -231,6 +251,7 @@ class CommunityBot(discord.Client):
 
     async def _round(self, guild: discord.Guild) -> None:
         assert self._github is not None
+        await self._replace_plain_catch_up(guild)
         for project in PROJECTS:
             try:
                 self.info[project.slug] = await self._github.repo(project.repo)
@@ -244,6 +265,23 @@ class CommunityBot(discord.Client):
             await self._announce(guild, project, found)
         self.save()  # the HTTP cache changed even if nothing was announced
         await self._update_messages(guild)
+
+    async def _replace_plain_catch_up(self, guild: discord.Guild) -> None:
+        """Once: remove the catch-up posts made before releases had pictures; they are posted again.
+
+        Only when nothing else can be in the channel: every project was caught up under the old name and
+        the bot's own posts are all there is to remove. On a new server there is nothing to do.
+        """
+        if REPLACE_PLAIN_CATCH_UP in self.state.done:
+            return
+        old = {"catch-up:" + project.slug for project in PROJECTS}
+        channel = layout.text_channel(guild, self.state, definition.ANNOUNCEMENTS)
+        if old <= self.state.done and channel is not None and self.user is not None:
+            async for message in channel.history(limit=len(PROJECTS) + 1):
+                if message.author.id == self.user.id and not message.role_mentions:
+                    await message.delete()
+        self.state.done.add(REPLACE_PLAIN_CATCH_UP)
+        self.save()
 
     async def _announce(self, guild: discord.Guild, project: Project, found: list[releases.Release]) -> None:
         repo = self.state.repo(project.slug)
@@ -267,10 +305,8 @@ class CommunityBot(discord.Client):
             mentions = discord.AllowedMentions(
                 everyone=False, users=False, roles=[role] if role else False, replied_user=False
             )
-            await channel.send(
-                view=messages.release(project, item, role.mention if role else ""),
-                allowed_mentions=mentions,
-            )
+            view = messages.release(project, item, role.mention if role else "")
+            await channel.send(view=view, files=messages.files(view), allowed_mentions=mentions)
             log.info("announced a release of %s", project.slug)
         await self._catch_up(channel, project, None if fresh else releases.latest(found))
 
@@ -287,7 +323,8 @@ class CommunityBot(discord.Client):
         self.state.done.add(job)
         self.save()
         if item is not None:
-            await channel.send(view=messages.release(project, item))
+            view = messages.release(project, item)
+            await channel.send(view=view, files=messages.files(view))
 
 
 def register_commands(bot: CommunityBot) -> None:
@@ -297,7 +334,8 @@ def register_commands(bot: CommunityBot) -> None:
     @bot.tree.command(name="projects", description="All projects with stars and latest release", guild=guild)
     @app_commands.checks.cooldown(1, 5.0)
     async def projects(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(view=messages.projects(bot.info, bot.latest), ephemeral=True)
+        view = messages.projects(bot.info, bot.latest)
+        await interaction.response.send_message(view=view, files=messages.files(view), ephemeral=True)
 
     @bot.tree.command(name="project", description="One project in detail", guild=guild)
     @app_commands.describe(name="Which project")
@@ -309,7 +347,7 @@ def register_commands(bot: CommunityBot) -> None:
             await interaction.response.send_message("That project is not listed.", ephemeral=True)
             return
         card = messages.project(chosen, bot.info.get(chosen.slug), bot.latest.get(chosen.slug))
-        await interaction.response.send_message(view=card, ephemeral=True)
+        await interaction.response.send_message(view=card, files=messages.files(card), ephemeral=True)
 
     @bot.tree.error
     async def on_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:

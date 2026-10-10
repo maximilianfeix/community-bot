@@ -124,8 +124,9 @@ Edit [`definition.py`](communitybot/definition.py) or [`projects.py`](communityb
 pull request, merge. The next deploy applies it. Removing something from the definition leaves it on the
 server; delete it there by hand.
 
-The banner and the avatar are drawn by [`tools/make_banner.py`](tools/make_banner.py) and
-[`tools/make_avatar.py`](tools/make_avatar.py) and committed.
+Every picture is drawn by [`tools/make_art.py`](tools/make_art.py), the avatar by
+[`tools/make_avatar.py`](tools/make_avatar.py); the results are committed. A project's colour and the
+few words on its picture are in `projects.py`, its sign in `make_art.py`.
 
 ## Licence
 

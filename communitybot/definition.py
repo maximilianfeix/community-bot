@@ -1,5 +1,7 @@
 """What the server should look like. Change this file and the bot changes the server on its next start.
 
+Channel names carry an emoji and a dot, so the list reads at a glance.
+
 Deliberately small: an empty server with a dozen silent channels looks dead. One place to read, one place to
 talk, one place to ask. Add a channel here when a conversation keeps happening that has no home.
 """
@@ -11,17 +13,14 @@ from dataclasses import dataclass
 from .projects import PROJECTS
 
 ACCENT = 0xD4F77A
-"""The one colour of the server: cards, banner and avatar."""
-ROLE_COLOUR = 0x7A9E1F
-"""The accent, darkened. A role colour is text on Discord's light theme too, where the accent itself
-has almost no contrast against white."""
+"""The colour of the server itself. Each project has its own next to it."""
 
 
 @dataclass(frozen=True)
 class RoleSpec:
     key: str
     name: str
-    colour: int = ROLE_COLOUR
+    colour: int
     """Shown wherever the role is mentioned, so a release ping is recognisable at a glance."""
 
 
@@ -56,21 +55,21 @@ GENERAL = "channel:general"
 HELP = "channel:help"
 
 SERVER = ServerSpec(
-    roles=tuple(RoleSpec(project.role_key, project.role_name) for project in PROJECTS),
+    roles=tuple(RoleSpec(project.role_key, project.role_name, project.colour) for project in PROJECTS),
     categories=(
         CategorySpec(
             "category:info",
-            "info",
+            "\u2726 info",
             (
                 ChannelSpec(
                     WELCOME,
-                    "welcome",
+                    "\U0001f44b\u30fbwelcome",
                     "What this server is, the projects, and how to get release notifications.",
                     read_only=True,
                 ),
                 ChannelSpec(
                     ANNOUNCEMENTS,
-                    "announcements",
+                    "\U0001f4e3\u30fbannouncements",
                     "New releases of every project, posted automatically.",
                     read_only=True,
                 ),
@@ -78,12 +77,14 @@ SERVER = ServerSpec(
         ),
         CategorySpec(
             "category:community",
-            "community",
+            "\u2726 community",
             (
-                ChannelSpec(GENERAL, "general", "Talk about the projects, or anything near them."),
+                ChannelSpec(
+                    GENERAL, "\U0001f4ac\u30fbgeneral", "Talk about the projects, or anything near them."
+                ),
                 ChannelSpec(
                     HELP,
-                    "help",
+                    "\U0001f6df\u30fbhelp",
                     "Questions about using a project. Bugs and feature requests go to GitHub.",
                 ),
             ),
