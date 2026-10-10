@@ -128,7 +128,7 @@ class TestMain:
         def refuse(self: object, token: str, **options: object) -> None:
             raise discord.LoginFailure("Improper token has been passed.")
 
-        monkeypatch.setattr(entry.CommunityBot, "run", refuse)
+        monkeypatch.setattr("communitybot.bot.CommunityBot.run", refuse)
         monkeypatch.setenv("DISCORD_TOKEN", TOKEN)
         monkeypatch.setenv("COMMUNITYBOT_GUILD_ID", "100000000000000001")
         monkeypatch.setenv("COMMUNITYBOT_STATE", str(tmp_path / "state.json"))
