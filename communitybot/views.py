@@ -50,7 +50,10 @@ class NotifyButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot: CommunityBot = interaction.client  # type: ignore[assignment]
-        await interaction.response.send_message(await toggle(bot, interaction, self.slug), ephemeral=True)
+        # Acknowledge first: Discord gives three seconds, and changing a role can take longer. Answering
+        # late would show "interaction failed" although the role changed, and invite a second click.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.followup.send(await toggle(bot, interaction, self.slug), ephemeral=True)
 
 
 async def toggle(bot: CommunityBot, interaction: discord.Interaction, slug: str) -> str:

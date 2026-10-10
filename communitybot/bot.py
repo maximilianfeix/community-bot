@@ -22,6 +22,22 @@ from .projects import BY_SLUG, PROJECTS, Project
 log = logging.getLogger(__name__)
 
 BANNER = Path(__file__).with_name("assets") / messages.BANNER_NAME
+REQUIRED_PERMISSIONS = discord.Permissions(
+    view_channel=True,
+    send_messages=True,
+    embed_links=True,
+    attach_files=True,
+    read_message_history=True,
+    manage_messages=True,
+    manage_channels=True,
+    manage_roles=True,
+    # The notification roles are not mentionable by members, so that nobody can ping them for fun.
+    # Discord then lets only someone with this permission ping them. What the bot actually pings is
+    # limited separately, by the allowed mentions on every message it sends.
+    mention_everyone=True,
+)
+"""Exactly what the invite link in the README asks for."""
+
 STOP_ROUND = frozenset({"rate_limit", "auth", "network"})
 """After one of these the rest of the round would fail the same way."""
 
@@ -53,6 +69,7 @@ class CommunityBot(discord.Client):
         self._github = GitHub(self._fetch, self.state.cache, self.settings.github_token)
         self.add_dynamic_items(views.NotifyButton)
         self.watch.change_interval(seconds=self.settings.poll_seconds)
+        self.watch.start()
 
     async def close(self) -> None:
         self.watch.cancel()
@@ -72,21 +89,27 @@ class CommunityBot(discord.Client):
 
     async def on_ready(self) -> None:
         log.info("logged in, in %d server(s)", len(self.guilds))
-        if self._prepared:  # on_ready fires again after every reconnect
-            return
-        guild = self.get_guild(self.settings.guild_id)
-        if guild is None:
-            log.error("the bot is not a member of the configured server; invite it and restart")
-            return
-        self._prepared = True
+
+    async def prepare(self, guild: discord.Guild) -> bool:
+        """Commands, layout and messages. Returns False if it has to be tried again later."""
+        missing = [
+            name
+            for name, wanted in REQUIRED_PERMISSIONS
+            if wanted and not getattr(guild.me.guild_permissions, name)
+        ]
+        if missing:
+            log.error(
+                "missing permissions (%s); re-invite the bot with the link from the README",
+                ", ".join(missing),
+            )
+            return False
         try:
             await self.tree.sync(guild=discord.Object(id=guild.id))
             await self.reconcile(guild)
-        except discord.Forbidden:
-            log.error("missing permissions; re-invite the bot with the link from the README")
-            return
-        if not self.watch.is_running():
-            self.watch.start()
+        except discord.HTTPException as error:
+            log.warning("set-up failed, will try again: %s", type(error).__name__)
+            return False
+        return True
 
     async def reconcile(self, guild: discord.Guild) -> None:
         """Bring roles, channels and the bot's own messages in line with `definition.SERVER`."""
@@ -139,11 +162,20 @@ class CommunityBot(discord.Client):
 
     @tasks.loop(seconds=900)
     async def watch(self) -> None:
-        """Look at GitHub, refresh the project cards, announce what is new."""
+        """Set up if that has not worked yet; then look at GitHub, refresh the cards, announce what is new."""
         guild = self.get_guild(self.settings.guild_id)
-        if guild is None or self._lock is None or self._lock.locked():
+        if guild is None:
+            log.error("the bot is not a member of the configured server; invite it")
+            return
+        if self._lock is None or self._lock.locked():
             return
         async with self._lock:
+            if not self._prepared:
+                # Only marked done after it worked, so a failed start is retried on the next round
+                # instead of leaving the bot connected but idle.
+                self._prepared = await self.prepare(guild)
+                if not self._prepared:
+                    return
             try:
                 await self._round(guild)
             except discord.HTTPException as error:

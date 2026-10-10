@@ -441,3 +441,67 @@ async def test_bot_never_pings_by_default_and_asks_for_no_privileged_intent(tmp_
         "projects",
         "project",
     }
+
+
+class TestPrepare:
+    def guild(self, permissions: discord.Permissions) -> MagicMock:
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = GUILD_ID
+        guild.me.guild_permissions = permissions
+        return guild
+
+    def bot(self, tmp_path: Path) -> CommunityBot:
+        bot = make_bot(tmp_path)
+        bot.tree.sync = AsyncMock()  # type: ignore[method-assign]
+        bot.reconcile = AsyncMock()  # type: ignore[method-assign]
+        return bot
+
+    async def test_succeeds_with_the_documented_permissions(self, tmp_path: Path) -> None:
+        from communitybot.bot import REQUIRED_PERMISSIONS
+
+        bot = self.bot(tmp_path)
+        assert await bot.prepare(self.guild(REQUIRED_PERMISSIONS)) is True
+        bot.tree.sync.assert_awaited_once()  # type: ignore[attr-defined]
+        bot.reconcile.assert_awaited_once()  # type: ignore[attr-defined]
+
+    async def test_missing_permission_is_reported_and_nothing_is_changed(self, tmp_path: Path) -> None:
+        from communitybot.bot import REQUIRED_PERMISSIONS
+
+        lacking = discord.Permissions(REQUIRED_PERMISSIONS.value)
+        lacking.manage_roles = False
+        bot = self.bot(tmp_path)
+        assert await bot.prepare(self.guild(lacking)) is False
+        bot.reconcile.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_failure_on_discords_side_means_try_again(self, tmp_path: Path) -> None:
+        from communitybot.bot import REQUIRED_PERMISSIONS
+
+        bot = self.bot(tmp_path)
+        bot.reconcile.side_effect = http_error()  # type: ignore[attr-defined]
+        assert await bot.prepare(self.guild(REQUIRED_PERMISSIONS)) is False
+
+
+def test_invite_link_in_the_readme_asks_for_exactly_the_required_permissions() -> None:
+    from communitybot.bot import REQUIRED_PERMISSIONS
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    assert f"permissions={REQUIRED_PERMISSIONS.value}" in readme
+    assert REQUIRED_PERMISSIONS.administrator is False
+    assert REQUIRED_PERMISSIONS.manage_guild is False
+    assert REQUIRED_PERMISSIONS.manage_webhooks is False
+    assert REQUIRED_PERMISSIONS.kick_members is False
+    assert REQUIRED_PERMISSIONS.ban_members is False
+
+
+async def test_button_acknowledges_before_it_changes_the_role(tmp_path: Path) -> None:
+    order: list[str] = []
+    bot = make_bot(tmp_path)
+    interaction = MagicMock()
+    interaction.client = bot
+    interaction.guild = None
+    interaction.response.defer = AsyncMock(side_effect=lambda **_: order.append("defer"))
+    interaction.followup.send = AsyncMock(side_effect=lambda *_, **__: order.append("answer"))
+    await views.NotifyButton("dejabuilt").callback(interaction)
+    assert order == ["defer", "answer"]
+    assert interaction.response.defer.await_args.kwargs["ephemeral"] is True
+    assert interaction.followup.send.await_args.kwargs["ephemeral"] is True

@@ -84,11 +84,16 @@ The tests use no network and no real Discord connection.
 2. **Invite it** (replace `APPLICATION_ID`):
 
    ```
-   https://discord.com/oauth2/authorize?client_id=APPLICATION_ID&scope=bot+applications.commands&permissions=268561424
+   https://discord.com/oauth2/authorize?client_id=APPLICATION_ID&scope=bot+applications.commands&permissions=268692496
    ```
 
    That number is: view channels, send messages, embed links, attach files, read message history, manage
-   messages, manage channels and manage roles. Not administrator.
+   messages, manage channels, manage roles and mention everyone. Not administrator.
+
+   "Mention everyone" is there for one reason: the notification roles cannot be pinged by members, and
+   Discord lets only someone with this permission ping such a role. The bot never pings `@everyone`; every
+   message it sends lists exactly whom it may mention, and that list is empty except for the one role of
+   the project being announced.
 3. **Add the repository secrets** (*Settings → Secrets and variables → Actions*):
 
    | Secret | |
