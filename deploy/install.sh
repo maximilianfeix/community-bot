@@ -14,7 +14,7 @@ if ! python3 -c 'import venv, ensurepip' 2>/dev/null; then
   apt-get update -qq
   apt-get install -y -qq python3 python3-venv >/dev/null
 fi
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || { echo "Python 3.10+ needed" >&2; exit 1; }
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' || { echo "Python 3.12+ needed" >&2; exit 1; }
 
 id communitybot >/dev/null 2>&1 \
   || useradd --system --home-dir /opt/communitybot --shell /usr/sbin/nologin communitybot

@@ -50,7 +50,7 @@ Decisions worth knowing:
 
 ## Run it locally
 
-Python 3.10 or newer.
+Python 3.12 or newer. The locked dependencies were compiled for it.
 
 ```bash
 python -m venv .venv

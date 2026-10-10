@@ -178,7 +178,7 @@ def test_observe_reads_names_topics_and_read_only_state() -> None:
     category.id, category.name = 20, "info"
     channel = MagicMock()
     channel.id, channel.name, channel.topic, channel.category_id = 30, "welcome", None, 20
-    channel.overwrites_for.return_value.send_messages = False
+    channel.overwrites_for.side_effect = lambda target: MagicMock(send_messages=target is not everyone)
     guild.roles, guild.categories, guild.text_channels = [everyone, role], [category], [channel]
     guild.default_role = everyone
     seen = layout.observe(guild)

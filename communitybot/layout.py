@@ -28,7 +28,10 @@ def observe(guild: discord.Guild) -> planning.Observed:
                 name=channel.name,
                 topic=channel.topic or "",
                 category_id=channel.category_id,
-                read_only=channel.overwrites_for(everyone).send_messages is False,
+                # Read-only means both halves hold: everyone is denied and the bot is allowed. If either
+                # was removed by hand, the plan sees a difference and restores the pair.
+                read_only=channel.overwrites_for(everyone).send_messages is False
+                and channel.overwrites_for(guild.me).send_messages is True,
             )
             for channel in guild.text_channels
         },
