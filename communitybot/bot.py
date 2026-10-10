@@ -27,6 +27,9 @@ AVATAR = Path(__file__).with_name("assets") / "avatar.png"
 WELCOME_MESSAGE = "message:welcome:2"
 PROJECTS_MESSAGE = "message:projects:2"
 PICKER_MESSAGE = "message:picker:2"
+HELLO_MESSAGE = "message:hello:1"
+ASK_MESSAGE = "message:ask:1"
+CATCH_UP = "catch-up:announcements"
 RETIRED_MESSAGES = ("message:welcome", "message:projects", "message:picker")
 """Keys of the embed messages the first version posted. They are deleted once and then forgotten."""
 REQUIRED_PERMISSIONS = discord.Permissions(
@@ -125,6 +128,7 @@ class CommunityBot(discord.Client):
         await layout.order_categories(
             guild, self.state, [category.key for category in definition.SERVER.categories]
         )
+        await layout.tint_roles(guild, self.state, definition.SERVER.roles)
         await self._set_avatar()
         await self._update_messages(guild, verify=True)
 
@@ -181,6 +185,22 @@ class CommunityBot(discord.Client):
             make_view=views.picker,
             verify=verify,
         )
+        # One card at the top of each open channel, so that neither starts empty.
+        for key, channel_key, make in (
+            (HELLO_MESSAGE, definition.GENERAL, lambda: messages.hello(channel_ids)),
+            (ASK_MESSAGE, definition.HELP, messages.ask),
+        ):
+            target = layout.text_channel(guild, self.state, channel_key)
+            if target is not None:
+                await layout.ensure_message(
+                    target,
+                    key,
+                    self.state,
+                    self.save,
+                    fingerprint=messages.fingerprint(make()),
+                    make_view=make,
+                    verify=verify,
+                )
 
     @tasks.loop(seconds=900)
     async def watch(self) -> None:
@@ -209,19 +229,42 @@ class CommunityBot(discord.Client):
 
     async def _round(self, guild: discord.Guild) -> None:
         assert self._github is not None
+        complete = True
         for project in PROJECTS:
             try:
                 self.info[project.slug] = await self._github.repo(project.repo)
                 found = await self._github.releases(project.repo)
             except GitHubError as error:
                 log.warning("github: %s: %s", project.slug, error.kind)
+                complete = False
                 if error.kind in STOP_ROUND:
                     break
                 continue
             self.latest[project.slug] = releases.latest(found)
             await self._announce(guild, project, found)
         self.save()  # the HTTP cache changed even if nothing was announced
+        if complete:
+            await self._catch_up(guild)
         await self._update_messages(guild)
+
+    async def _catch_up(self, guild: discord.Guild) -> None:
+        """Once per server: post the latest release of every project, oldest first and without a ping.
+
+        A new server has nothing to announce yet; without this, the channel would stay empty until
+        the next release. Waits for a round in which every project could be read, so nothing is left out.
+        """
+        if CATCH_UP in self.state.done:
+            return
+        channel = layout.text_channel(guild, self.state, definition.ANNOUNCEMENTS)
+        if channel is None:
+            return
+        # Remember first, then post, as with announcements: rather an incomplete list than a double one.
+        self.state.done.add(CATCH_UP)
+        self.save()
+        found = [(item, project) for project in PROJECTS if (item := self.latest.get(project.slug))]
+        found.sort(key=lambda pair: (pair[0].published_at, pair[0].id))
+        for item, project in found:
+            await channel.send(view=messages.release(project, item))
 
     async def _announce(self, guild: discord.Guild, project: Project, found: list[releases.Release]) -> None:
         repo = self.state.repo(project.slug)

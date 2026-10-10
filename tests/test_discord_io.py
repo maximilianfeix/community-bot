@@ -620,3 +620,83 @@ async def test_messages_are_posted_as_layouts_and_old_embed_messages_are_retired
 
     await bot._update_messages(guild)  # type: ignore[arg-type]
     assert channel.send.await_count == 3  # nothing changed, nothing is sent again
+
+
+class TestTintRoles:
+    def guild_with_role(self, colour: int) -> tuple[FakeGuild, State, MagicMock]:
+        guild, state = FakeGuild(), State()
+        role = MagicMock(spec=discord.Role)
+        role.colour = discord.Colour(colour)
+        guild.things[41] = role
+        state.resources[PROJECT.role_key] = 41
+        return guild, state, role
+
+    async def test_owned_role_gets_the_colour(self) -> None:
+        guild, state, role = self.guild_with_role(0)
+        await layout.tint_roles(guild, state, definition.SERVER.roles)  # type: ignore[arg-type]
+        assert role.edit.await_args.kwargs["colour"].value == definition.ACCENT
+
+    async def test_role_with_the_right_colour_is_not_edited(self) -> None:
+        guild, state, role = self.guild_with_role(definition.ACCENT)
+        await layout.tint_roles(guild, state, definition.SERVER.roles)  # type: ignore[arg-type]
+        role.edit.assert_not_awaited()
+
+
+class TestStarterCards:
+    async def test_open_channels_get_one_card_each_and_keep_it(self, tmp_path: Path) -> None:
+        bot = make_bot(tmp_path)
+        guild = FakeGuild()
+        channels = {}
+        for index, key in enumerate((definition.WELCOME, definition.GENERAL, definition.HELP)):
+            channel = MagicMock(spec=discord.TextChannel)
+            channel.send = AsyncMock(return_value=MagicMock(id=700 + index))
+            guild.things[60 + index] = channel
+            bot.state.resources[key] = 60 + index
+            channels[key] = channel
+
+        await bot._update_messages(guild)  # type: ignore[arg-type]
+        await bot._update_messages(guild)  # type: ignore[arg-type]
+
+        general, help_channel = channels[definition.GENERAL], channels[definition.HELP]
+        assert general.send.await_count == 1
+        assert help_channel.send.await_count == 1
+        assert "<#62>" in messages.text_of(general.send.await_args.kwargs["view"])
+        assert "Asking for help" in messages.text_of(help_channel.send.await_args.kwargs["view"])
+
+
+class TestCatchUp:
+    def bot_with_channel(self, tmp_path: Path) -> tuple[CommunityBot, FakeGuild, MagicMock]:
+        bot, guild = make_bot(tmp_path), FakeGuild()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        guild.things[55] = channel
+        bot.state.resources[definition.ANNOUNCEMENTS] = 55
+        return bot, guild, channel
+
+    async def test_latest_releases_are_posted_once_oldest_first_without_a_ping(self, tmp_path: Path) -> None:
+        bot, guild, channel = self.bot_with_channel(tmp_path)
+        bot.latest = {"dejabuilt": make_release(9), "proxy-scraper": make_release(3), "spillage": None}
+
+        await bot._catch_up(guild)  # type: ignore[arg-type]
+        await bot._catch_up(guild)  # type: ignore[arg-type]
+
+        shown = [messages.text_of(call.kwargs["view"]) for call in channel.send.await_args_list]
+        assert [text.splitlines()[0] for text in shown] == ["## proxy-scraper v3", "## dejabuilt v9"]
+        assert all("<@" not in text for text in shown)
+        assert all("allowed_mentions" not in call.kwargs for call in channel.send.await_args_list)
+
+    async def test_it_is_remembered_across_a_restart(self, tmp_path: Path) -> None:
+        bot, guild, channel = self.bot_with_channel(tmp_path)
+        bot.latest = {"dejabuilt": make_release(9)}
+        await bot._catch_up(guild)  # type: ignore[arg-type]
+
+        again = make_bot(tmp_path)
+        again.latest = {"dejabuilt": make_release(9)}
+        await again._catch_up(guild)  # type: ignore[arg-type]
+        assert channel.send.await_count == 1
+
+    async def test_without_the_channel_it_waits(self, tmp_path: Path) -> None:
+        bot = make_bot(tmp_path)
+        bot.latest = {"dejabuilt": make_release(9)}
+        await bot._catch_up(FakeGuild())  # type: ignore[arg-type]
+        assert bot.state.done == set()

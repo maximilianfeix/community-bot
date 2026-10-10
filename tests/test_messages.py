@@ -7,7 +7,7 @@ import pytest
 from discord import ui
 
 from communitybot import messages, views
-from communitybot.definition import SERVER
+from communitybot.definition import ACCENT, SERVER
 from communitybot.github import RepoInfo
 from communitybot.projects import BY_SLUG, OWNER, PROJECTS
 from communitybot.releases import Release
@@ -75,8 +75,8 @@ class TestWelcome:
         view = messages.welcome(CHANNELS)
         container = view.children[0]
         assert isinstance(container, ui.Container)
-        assert container.accent_colour == messages.ACCENT
-        assert messages.components(view)[0]["accent_color"] == messages.ACCENT
+        assert container.accent_colour == ACCENT
+        assert messages.components(view)[0]["accent_color"] == ACCENT
         assert within_limits(view)
 
 
@@ -148,6 +148,22 @@ class TestRelease:
     def test_odd_timestamp_is_tolerated(self) -> None:
         text = messages.text_of(messages.release(PROJECT, make_release(published_at="soon")))
         assert "<t:" not in text
+
+
+class TestStarterCards:
+    def test_hello_points_to_the_help_channel(self) -> None:
+        text = messages.text_of(messages.hello(CHANNELS))
+        assert text.startswith("## Say hello")
+        assert f"<#{CHANNELS['channel:help']}>" in text
+
+    def test_hello_works_before_the_channels_exist(self) -> None:
+        assert "<#" not in messages.text_of(messages.hello({}))
+
+    def test_ask_links_every_issue_tracker(self) -> None:
+        view = messages.ask()
+        assert link_buttons(view) == [(project.name, f"{project.url}/issues") for project in PROJECTS]
+        assert len(PROJECTS) <= 5  # one row of buttons
+        assert within_limits(view)
 
 
 class TestFingerprint:

@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 import discord
 
 from . import plan as planning
+from .definition import RoleSpec
 from .state import MessageState, State
 
 log = logging.getLogger(__name__)
@@ -203,3 +204,11 @@ async def order_categories(guild: discord.Guild, state: State, keys: Sequence[st
         category = _category(guild, state, key)
         if category is not None and category.position != position:
             await category.edit(position=position, reason=REASON)
+
+
+async def tint_roles(guild: discord.Guild, state: State, roles: Sequence[RoleSpec]) -> None:
+    """Give the bot's own roles their colour. Roles it does not own are not looked at."""
+    for spec in roles:
+        role = guild.get_role(state.resources.get(spec.key, 0))
+        if role is not None and role.colour.value != spec.colour:
+            await role.edit(colour=discord.Colour(spec.colour), reason=REASON)

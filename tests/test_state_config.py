@@ -146,3 +146,9 @@ class TestMain:
         monkeypatch.delenv("DISCORD_TOKEN", raising=False)
         assert entry.main() == 2
         assert "DISCORD_TOKEN is not set" in capsys.readouterr().err
+
+
+def test_one_off_jobs_survive_a_round_trip_and_old_files_have_none() -> None:
+    state = State(done={"catch-up:announcements"})
+    assert State.from_dict(state.to_dict()).done == {"catch-up:announcements"}
+    assert State.from_dict({"version": 1}).done == set()
