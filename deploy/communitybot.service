@@ -1,0 +1,48 @@
+[Unit]
+Description=communitybot, the Discord bot of the maximilianfeix open-source server
+Documentation=https://github.com/maximilianfeix/community-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=communitybot
+Group=communitybot
+WorkingDirectory=/opt/communitybot/app
+# Tokens and the server id, written by the deploy workflow (root only, mode 600)
+EnvironmentFile=/etc/communitybot.env
+Environment=COMMUNITYBOT_STATE=/var/lib/communitybot/state.json
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/communitybot/venv/bin/python -m communitybot
+Restart=always
+RestartSec=10
+
+# The bot needs the network and its own state directory, nothing else.
+StateDirectory=communitybot
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target
