@@ -755,7 +755,7 @@ class TestCatchUp:
         bot, guild, channel = self.bot_with_channel(tmp_path)
         await bot._announce(guild, PROJECT, [])  # type: ignore[arg-type]
         channel.send.assert_not_awaited()
-        assert bot.state.done == {"catch-up:2:dejabuilt"}
+        assert bot.state.done == {"catch-up:dejabuilt"}
 
     async def test_without_the_channel_it_waits(self, tmp_path: Path) -> None:
         bot = make_bot(tmp_path)
@@ -764,22 +764,23 @@ class TestCatchUp:
 
 
 class TestReplacePlainCatchUp:
-    def setup(self, tmp_path: Path, done: set[str]) -> tuple[CommunityBot, FakeGuild, list[MagicMock]]:
+    OLD = frozenset("catch-up:" + project.slug for project in PROJECTS)
+
+    def setup(
+        self, tmp_path: Path, done: frozenset[str], authors: list[int], pinged: int | None = None
+    ) -> tuple[CommunityBot, FakeGuild, list[MagicMock]]:
         bot, guild = make_bot(tmp_path), FakeGuild()
         bot._connection.user = MagicMock(id=5)
         bot.state.done = set(done)
-        posts = [
-            MagicMock(role_mentions=[]),
-            MagicMock(role_mentions=[object()]),
-            MagicMock(role_mentions=[]),
-        ]
-        posts[0].author.id = posts[1].author.id = 5
-        posts[2].author.id = 6
-        for post in posts:
+        posts = []
+        for index, author in enumerate(authors):
+            post = MagicMock(role_mentions=[object()] if index == pinged else [])
+            post.author.id = author
             post.delete = AsyncMock()
+            posts.append(post)
 
         async def history(limit: int) -> Any:
-            for post in posts:
+            for post in posts[:limit]:
                 yield post
 
         channel = MagicMock(spec=discord.TextChannel)
@@ -788,15 +789,33 @@ class TestReplacePlainCatchUp:
         bot.state.resources[definition.ANNOUNCEMENTS] = 55
         return bot, guild, posts
 
-    async def test_only_the_bots_own_posts_without_a_ping_are_removed_once(self, tmp_path: Path) -> None:
-        old = {"catch-up:" + project.slug for project in PROJECTS}
-        bot, guild, posts = self.setup(tmp_path, old)
+    async def test_plain_posts_are_removed_once_and_their_projects_caught_up_again(
+        self, tmp_path: Path
+    ) -> None:
+        bot, guild, posts = self.setup(tmp_path, self.OLD, [5] * len(PROJECTS))
         await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
         await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
-        assert [post.delete.await_count for post in posts] == [1, 0, 0]
+        assert [post.delete.await_count for post in posts] == [1] * len(PROJECTS)
+        assert bot.state.done == {"replace-plain-catch-up"}
+
+    @pytest.mark.parametrize(
+        ("authors", "pinged"),
+        [
+            ([5] * (len(PROJECTS) + 1), None),  # more posts than catch-ups: something was announced
+            ([5, 5, 6], None),  # somebody else wrote
+            ([5, 5, 5], 0),  # a real announcement
+        ],
+    )
+    async def test_anything_else_in_the_channel_and_nothing_is_touched(
+        self, tmp_path: Path, authors: list[int], pinged: int | None
+    ) -> None:
+        bot, guild, posts = self.setup(tmp_path, self.OLD, authors, pinged)
+        await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
+        assert all(post.delete.await_count == 0 for post in posts)
+        assert bot.state.done == self.OLD | {"replace-plain-catch-up"}
 
     async def test_a_new_server_is_left_alone(self, tmp_path: Path) -> None:
-        bot, guild, posts = self.setup(tmp_path, set())
+        bot, guild, posts = self.setup(tmp_path, frozenset(), [5, 5])
         await bot._replace_plain_catch_up(guild)  # type: ignore[arg-type]
-        assert [post.delete.await_count for post in posts] == [0, 0, 0]
-        assert "replace-plain-catch-up" in bot.state.done
+        assert all(post.delete.await_count == 0 for post in posts)
+        assert bot.state.done == {"replace-plain-catch-up"}

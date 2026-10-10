@@ -41,7 +41,7 @@ RETIRED_MESSAGES = (
 )
 """Keys of earlier versions of the messages in #welcome. They are deleted once, so that the current ones
 appear in order, and then forgotten."""
-CATCH_UP = "catch-up:2:"
+CATCH_UP = "catch-up:"
 """Prefix of the one-off job per project that shows its latest release in a new server."""
 REPLACE_PLAIN_CATCH_UP = "replace-plain-catch-up"
 PROFILE_BANNER_SET = "profile-banner"
@@ -267,19 +267,22 @@ class CommunityBot(discord.Client):
         await self._update_messages(guild)
 
     async def _replace_plain_catch_up(self, guild: discord.Guild) -> None:
-        """Once: remove the catch-up posts made before releases had pictures; they are posted again.
+        """Once: remove the catch-up posts made before releases had pictures, so they are made again.
 
-        Only when nothing else can be in the channel: every project was caught up under the old name and
-        the bot's own posts are all there is to remove. On a new server there is nothing to do.
+        Only while those posts are all there is in the channel. As soon as anything else was posted, the
+        old posts stay as they are and no project is caught up a second time.
         """
         if REPLACE_PLAIN_CATCH_UP in self.state.done:
             return
-        old = {"catch-up:" + project.slug for project in PROJECTS}
+        jobs = {CATCH_UP + project.slug for project in PROJECTS} & self.state.done
         channel = layout.text_channel(guild, self.state, definition.ANNOUNCEMENTS)
-        if old <= self.state.done and channel is not None and self.user is not None:
-            async for message in channel.history(limit=len(PROJECTS) + 1):
-                if message.author.id == self.user.id and not message.role_mentions:
+        if jobs and channel is not None and self.user is not None:
+            found = [message async for message in channel.history(limit=len(jobs) + 1)]
+            plain = [m for m in found if m.author.id == self.user.id and not m.role_mentions]
+            if len(plain) == len(found) <= len(jobs):
+                for message in plain:
                     await message.delete()
+                self.state.done -= jobs
         self.state.done.add(REPLACE_PLAIN_CATCH_UP)
         self.save()
 
