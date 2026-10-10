@@ -11,7 +11,9 @@ import re
 from typing import TYPE_CHECKING, Any
 
 import discord
+from discord import ui
 
+from .messages import ACCENT
 from .projects import BY_SLUG, PROJECTS
 
 if TYPE_CHECKING:
@@ -78,9 +80,20 @@ async def toggle(bot: CommunityBot, interaction: discord.Interaction, slug: str)
         return "That did not work. Please try again in a moment."
 
 
-def picker_view() -> discord.ui.View:
-    """One button per project, in the order of the project list."""
-    view = discord.ui.View(timeout=None)
+def picker() -> ui.LayoutView:
+    """The notification card: a short explanation and one button per project."""
+    container: ui.Container[ui.LayoutView] = ui.Container(accent_colour=ACCENT)
+    container.add_item(
+        ui.TextDisplay(
+            "## Release notifications\n"
+            "Press a button to be pinged when that project ships a release. "
+            "Press it again to stop. Only you see the answer."
+        )
+    )
+    row: ui.ActionRow[ui.LayoutView] = ui.ActionRow()
     for project in PROJECTS:
-        view.add_item(NotifyButton(project.slug))
+        row.add_item(NotifyButton(project.slug))
+    container.add_item(row)
+    view = ui.LayoutView(timeout=None)
+    view.add_item(container)
     return view

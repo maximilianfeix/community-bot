@@ -22,6 +22,13 @@ from .projects import BY_SLUG, PROJECTS, Project
 log = logging.getLogger(__name__)
 
 BANNER = Path(__file__).with_name("assets") / messages.BANNER_NAME
+AVATAR = Path(__file__).with_name("assets") / "avatar.png"
+
+WELCOME_MESSAGE = "message:welcome:2"
+PROJECTS_MESSAGE = "message:projects:2"
+PICKER_MESSAGE = "message:picker:2"
+RETIRED_MESSAGES = ("message:welcome", "message:projects", "message:picker")
+"""Keys of the embed messages the first version posted. They are deleted once and then forgotten."""
 REQUIRED_PERMISSIONS = discord.Permissions(
     view_channel=True,
     send_messages=True,
@@ -115,48 +122,63 @@ class CommunityBot(discord.Client):
         """Bring roles, channels and the bot's own messages in line with `definition.SERVER`."""
         operations = planning.plan(definition.SERVER, layout.observe(guild), self.state.resources)
         await layout.apply(guild, operations, self.state, self.save)
+        await layout.order_categories(
+            guild, self.state, [category.key for category in definition.SERVER.categories]
+        )
+        await self._set_avatar()
         await self._update_messages(guild, verify=True)
+
+    async def _set_avatar(self) -> None:
+        """Give the bot its picture once. Avatar changes are rate limited, so a failure is only logged."""
+        if self.user is None or self.user.avatar is not None or not AVATAR.exists():
+            return
+        try:
+            await self.user.edit(avatar=AVATAR.read_bytes())
+        except discord.HTTPException as error:
+            log.warning("could not set the avatar: %s", type(error).__name__)
 
     async def _update_messages(self, guild: discord.Guild, verify: bool = False) -> None:
         channel = layout.text_channel(guild, self.state, definition.WELCOME)
         if channel is None:
             return
+        # Messages from before the layout format: remove them, so the new ones appear in order.
+        for old_key in RETIRED_MESSAGES:
+            await layout.retire_message(channel, old_key, self.state, self.save)
         channel_ids = {
             key: self.state.resources[key]
             for key in definition.SERVER.channel_keys()
             if key in self.state.resources
         }
-        welcome = [messages.welcome(channel_ids)]
-        banner = BANNER.read_bytes() if BANNER.exists() else b""
+        has_banner = BANNER.exists()
         await layout.ensure_message(
             channel,
-            "message:welcome",
+            WELCOME_MESSAGE,
             self.state,
             self.save,
-            fingerprint=messages.fingerprint(welcome, extra=str(len(banner))),
-            embeds=welcome,
-            make_file=(lambda: discord.File(BANNER, filename=messages.BANNER_NAME)) if banner else None,
+            fingerprint=messages.fingerprint(
+                messages.welcome(channel_ids, has_banner),
+                extra=str(BANNER.stat().st_size) if has_banner else "",
+            ),
+            make_view=lambda: messages.welcome(channel_ids, has_banner),
+            make_file=(lambda: discord.File(BANNER, filename=messages.BANNER_NAME)) if has_banner else None,
             verify=verify,
         )
-        cards = messages.project_cards(self.info, self.latest)
         await layout.ensure_message(
             channel,
-            "message:projects",
+            PROJECTS_MESSAGE,
             self.state,
             self.save,
-            fingerprint=messages.fingerprint(cards),
-            embeds=cards,
+            fingerprint=messages.fingerprint(messages.projects(self.info, self.latest)),
+            make_view=lambda: messages.projects(self.info, self.latest),
             verify=verify,
         )
-        picker = [messages.picker()]
         await layout.ensure_message(
             channel,
-            "message:picker",
+            PICKER_MESSAGE,
             self.state,
             self.save,
-            fingerprint=messages.fingerprint(picker, extra=",".join(p.slug for p in PROJECTS)),
-            embeds=picker,
-            view=views.picker_view(),
+            fingerprint=messages.fingerprint(views.picker()),
+            make_view=views.picker,
             verify=verify,
         )
 
@@ -222,8 +244,7 @@ class CommunityBot(discord.Client):
                 everyone=False, users=False, roles=[role] if role else False, replied_user=False
             )
             await channel.send(
-                content=role.mention if role else None,
-                embed=messages.release(project, item),
+                view=messages.release(project, item, role.mention if role else ""),
                 allowed_mentions=mentions,
             )
             log.info("announced a release of %s", project.slug)
@@ -236,9 +257,7 @@ def register_commands(bot: CommunityBot) -> None:
     @bot.tree.command(name="projects", description="All projects with stars and latest release", guild=guild)
     @app_commands.checks.cooldown(1, 5.0)
     async def projects(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            embeds=messages.project_cards(bot.info, bot.latest), ephemeral=True
-        )
+        await interaction.response.send_message(view=messages.projects(bot.info, bot.latest), ephemeral=True)
 
     @bot.tree.command(name="project", description="One project in detail", guild=guild)
     @app_commands.describe(name="Which project")
@@ -249,8 +268,8 @@ def register_commands(bot: CommunityBot) -> None:
         if chosen is None:
             await interaction.response.send_message("That project is not listed.", ephemeral=True)
             return
-        card = messages.project_card(chosen, bot.info.get(chosen.slug), bot.latest.get(chosen.slug))
-        await interaction.response.send_message(embed=card, ephemeral=True)
+        card = messages.project(chosen, bot.info.get(chosen.slug), bot.latest.get(chosen.slug))
+        await interaction.response.send_message(view=card, ephemeral=True)
 
     @bot.tree.error
     async def on_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:

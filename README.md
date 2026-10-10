@@ -29,7 +29,7 @@ It does not read messages, does not know who is on the server and asks for no pr
 | `github.py` | Reads stars and releases from the GitHub API, with ETags. |
 | `releases.py` | Pure: which releases are new. |
 | `sanitize.py` | Pure: makes text from GitHub safe to post. |
-| `messages.py` | Every embed the bot posts. |
+| `messages.py` | Everything the bot posts, built from Discord's layout components. |
 | `views.py` | The notification buttons. They survive restarts. |
 | `state.py` | One JSON file: what the bot created and what it already announced. |
 | `bot.py` | The client that ties it together. |
@@ -124,7 +124,8 @@ Edit [`definition.py`](communitybot/definition.py) or [`projects.py`](communityb
 pull request, merge. The next deploy applies it. Removing something from the definition leaves it on the
 server; delete it there by hand.
 
-The banner is drawn by [`tools/make_banner.py`](tools/make_banner.py) and committed.
+The banner and the avatar are drawn by [`tools/make_banner.py`](tools/make_banner.py) and
+[`tools/make_avatar.py`](tools/make_avatar.py) and committed.
 
 ## Licence
 
