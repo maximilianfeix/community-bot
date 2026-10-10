@@ -38,7 +38,11 @@ def main(font_dir: Path) -> None:
 
     draw.rounded_rectangle((px(left), px(74), px(left + 14), px(88)), radius=px(4), fill=ACCENT)
     draw.text(
-        (px(left + 28), px(81)), "maximilianfeix", font=font("GeistMono-Regular.ttf", 22), fill=MUTED, anchor="lm"
+        (px(left + 28), px(81)),
+        "maximilianfeix",
+        font=font("GeistMono-Regular.ttf", 22),
+        fill=MUTED,
+        anchor="lm",
     )
     draw.text((px(left - 3), px(118)), "open source", font=font("Geist-SemiBold.ttf", 92), fill=TEXT)
     draw.text(
