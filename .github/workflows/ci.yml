@@ -43,8 +43,10 @@ jobs:
     concurrency: deploy   # never two deploys at the same time
     env:
       # Log in as root, or as DEPLOY_USER (a user with passwordless sudo) when root login is off.
-      # Host and user are secrets so they stay out of the public log.
-      USER_AT_HOST: ${{ secrets.DEPLOY_USER || 'root' }}@${{ secrets.DEPLOY_HOST }}
+      # The user is a secret so it stays out of the public log. The host is develop's tailnet address
+      # (own Headscale VPN), reachable only from inside the VPN, no longer the public DEPLOY_HOST.
+      DEPLOY_ADDR: 100.64.0.2
+      USER_AT_HOST: ${{ secrets.DEPLOY_USER || 'root' }}@100.64.0.2
       SUDO: ${{ (secrets.DEPLOY_USER && secrets.DEPLOY_USER != 'root') && 'sudo -n' || '' }}
     steps:
       - name: Check the secrets
@@ -74,6 +76,20 @@ jobs:
         with:
           persist-credentials: false
 
+      # The server is reached through the own Headscale VPN, not public SSH. TS_AUTHKEY: reusable, ephemeral
+      # pre-auth key with tag:ci, which may only reach port 22 on tag:server.
+      - name: Connect to the VPN
+        if: steps.secrets.outputs.ready == 'true'
+        timeout-minutes: 5
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: --login-server=https://vpn.aquaris.dev --accept-dns=false --accept-routes=false
+          hostname: gh-community-bot-${{ github.run_id }}
+          timeout: 1m
+          retry: 3
+          ping: 100.64.0.2
+
       - name: Set up SSH
         if: steps.secrets.outputs.ready == 'true'
         env:
@@ -84,6 +100,7 @@ jobs:
           printf '%s\n' "$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           # Pinned host key: a server that presents a different key gets no token.
           printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          echo "$DEPLOY_ADDR ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMWSKndJ3ho1aMrf3M09+OLTG8HSYlul21LqvsyDAsv2" >> ~/.ssh/known_hosts
 
       - name: Copy the bot
         if: steps.secrets.outputs.ready == 'true'
